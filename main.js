@@ -59,6 +59,8 @@ let toastUntil = 0, actionCooldown = 0, darknessWarned = false, hungerWarned = f
 let footBob = 0, viewInspection = null, currentTarget = null, activeSpearAnimation = 0;
 const player = new THREE.Vector3(0, 1.7, 8);
 const direction = new THREE.Vector3();
+const sightFrustum = new THREE.Frustum();
+const sightProjection = new THREE.Matrix4();
 const keys = new Set();
 const handSpear = new THREE.Group();
 const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.04, 1.8, 7), new THREE.MeshStandardMaterial({color:0x7d6240}));
@@ -80,8 +82,13 @@ function nearestEntrance(maxDistance = 3.5) {
 }
 function context() {
   camera.getWorldDirection(direction);
+  sightProjection.multiplyMatrices(camera.projectionMatrix,camera.matrixWorldInverse);
+  sightFrustum.setFromProjectionMatrix(sightProjection);
   return { player, cameraDirection: direction, phase: state.phase, day: state.day, phaseTime: state.phaseTime,
     noise: state.noise, inside: insideCabin(), fire: state.fire, entrances: world.entrances,
+    isSightBlocked: world.isSightBlocked,
+    isPointVisible: point => sightFrustum.containsPoint(point),
+    isMovementBlocked: (x,z,radius) => world.obstacles.some(o=>Math.hypot(x-o.x,z-o.z)<o.radius+radius),
     bracing: keys.has('KeyB') && insideCabin() ? nearestEntrance(2.8)?.id ?? null : null,
     kill, toast, sound: (name,pos) => audio.play(name,pos), damage: n => {state.health=Math.max(0,state.health-n);}, time:state.time };
 }
@@ -389,6 +396,7 @@ window.__game = {
   get mode(){return mode;},
   get position(){return {x:player.x,y:player.y,z:player.z};},
   get entities(){return entities.list.map(e=>({id:e.id,name:e.name,active:e.active}));},
+  get forest(){return {...world.forestMetrics};},
   get entrances(){return world.entrances.map(e=>({id:e.id,health:e.health,maxHealth:e.maxHealth}));},
   get resources(){return world.resources.map(r=>({id:r.id,kind:r.kind,available:r.available,position:{x:r.position.x,z:r.position.z}}));},
 };

@@ -178,7 +178,7 @@ export function createAudio() {
     if (!ready()) return;
     name = { reveal: 'impostor', warning: 'danger' }[name] || name;
     const now = context.currentTime;
-    const cooldown = { breath: 2.6, rustle: 0.8, laugh: 4, knock: 0.7, danger: 2, impostor: 2, help: 5 }[name] || 0.08;
+    const cooldown = { breath: 2.6, rustle: 0.8, 'wood-creak': 1.1, laugh: 4, knock: 0.7, danger: 2, impostor: 2, help: 5 }[name] || 0.08;
     if ((cooldowns.get(name) ?? -Infinity) + cooldown > now) return;
     cooldowns.set(name, now);
     switch (name) {
@@ -190,6 +190,15 @@ export function createAudio() {
       case 'rustle':
         noise(0.7, 0.13, 1800, 'highpass', 0, position, 0.12);
         noise(0.35, 0.08, 900, 'bandpass', 0.32, position);
+        break;
+      case 'wood-creak':
+        // A trunk straining under its own weight, followed by a small dry
+        // landing. Soft attacks keep the cue distinct without a loud crack.
+        tone(192, 126, 0.43, 0.055, 'triangle', 0, position);
+        tone(365, 258, 0.37, 0.021, 'triangle', 0.07, position);
+        noise(0.46, 0.045, 860, 'bandpass', 0, position, 0.12);
+        noise(0.13, 0.065, 950, 'lowpass', 0.51, position, 0.018);
+        tone(117, 49, 0.14, 0.038, 'triangle', 0.51, position);
         break;
       case 'laugh':
         for (let i = 0; i < 6; i++) {

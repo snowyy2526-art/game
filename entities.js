@@ -1,4 +1,5 @@
 import { createWandererModel } from './models/wanderer.js';
+import { createFloraModel } from './models/flora.js';
 
 /** Procedural creatures and their readable, distinct survival rules. */
 export function createEntities(THREE, scene) {
@@ -17,7 +18,6 @@ export function createEntities(THREE, scene) {
 
   const material = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 1, ...extra });
   const skin = material(0x383c33);
-  const bark = material(0x32382b);
   const black = material(0x0b1110);
   const cloth = material(0x565749);
   const red = material(0x461b18);
@@ -91,23 +91,12 @@ export function createEntities(THREE, scene) {
   wanderer.patrol = v();
   wanderer.aware = false;
 
-  const floraGroup = new THREE.Group();
-  mesh(new THREE.CylinderGeometry(0.15, 0.29, 3.7, 6), bark, floraGroup, 0, 1.85, 0);
-  for (let i = 0; i < 8; i++) {
-    const a = i * 2.4;
-    const y = 1.7 + (i % 4) * 0.4;
-    const x = Math.cos(a) * (0.8 + (i % 2) * 0.5);
-    const z = Math.sin(a) * 0.8;
-    limb(floraGroup, bark, [0, y, 0], [x, y + 0.8, z], 0.07);
-    limb(floraGroup, bark, [x, y + 0.8, z], [x * 1.2, y + 1.2, z * 1.3], 0.035);
-    if (i % 2 === 0) {
-      mesh(new THREE.IcosahedronGeometry(0.7, 0), material(0x263725), floraGroup, x, y + 0.8, z);
-    }
-  }
-  eyes(floraGroup, 2.15, 0.07, eyeMat, 0.17);
-  const flora = add('flora', 'Flora Tímida', { group: floraGroup }, -23, -19);
+  const flora = add('flora', 'Flora Tímida', createFloraModel(THREE), -23, -19);
   flora.aware = false;
   flora.attracted = false;
+  flora.identified = false;
+  flora.studyTime = 0;
+  flora.creakTimer = 0;
   flora.noiseTarget = v();
 
   const impostorModel = humanoid('human');
@@ -164,11 +153,17 @@ export function createEntities(THREE, scene) {
   }
 
   function observed(e, ctx, threshold = 0.75) {
-    target.copy(e.group.position);
-    target.y += e.id === 'flora' ? 2.1 : 1.7;
-    direction.copy(target).sub(ctx.player);
-    const d = direction.length();
-    return d < 60 && direction.normalize().dot(ctx.cameraDirection) > threshold;
+    // A 4.5m entity can fill the view even when her face is above the reticle.
+    // Test the lower trunk, torso and crown rather than a single old eye point.
+    const heights = e.id === 'flora' ? [1.35, 2.65, 3.85, 4.4] : [1.7];
+    return heights.some(height => {
+      target.copy(e.group.position); target.y += height;
+      direction.copy(target).sub(ctx.player);
+      const d = direction.length();
+      return d < 60 && direction.normalize().dot(ctx.cameraDirection) > threshold &&
+        (!ctx.isPointVisible || ctx.isPointVisible(target)) &&
+        (!ctx.isSightBlocked || !ctx.isSightBlocked(ctx.player,target));
+    });
   }
 
   function distance(e, p) {
@@ -182,14 +177,22 @@ export function createEntities(THREE, scene) {
     direction.normalize();
     const nx = e.group.position.x + direction.x * speed * dt;
     const nz = e.group.position.z + direction.z * speed * dt;
-    // Daylight entities cannot phase through the cabin walls.
-    if (avoidCabin && Math.abs(nx) < 5.5 && Math.abs(nz) < 4.7) {
-      if (Math.abs(e.group.position.x) >= 5.5) e.group.position.z += direction.z * speed * dt;
-      else e.group.position.x += direction.x * speed * dt;
-    } else {
-      e.group.position.x = nx;
-      e.group.position.z = nz;
+    // Short local steering keeps the denser trunks solid for day creatures.
+    // Night approaches already use explicit waypoints around the cabin.
+    const blocked = (x,z) => avoidCabin && ((Math.abs(x)<5.5 && Math.abs(z)<4.7) ||
+      (lastCtx?.isMovementBlocked && lastCtx.isMovementBlocked(x,z,e===flora?.34:.23)));
+    let nextX=nx,nextZ=nz;
+    if(blocked(nextX,nextZ)) {
+      let found=false;
+      for(const angle of [.55,-.55,1.1,-1.1,1.58,-1.58]) {
+        const dx=direction.x*Math.cos(angle)-direction.z*Math.sin(angle);
+        const dz=direction.x*Math.sin(angle)+direction.z*Math.cos(angle);
+        const x=e.group.position.x+dx*speed*dt,z=e.group.position.z+dz*speed*dt;
+        if(!blocked(x,z)){nextX=x;nextZ=z;found=true;break;}
+      }
+      if(!found)return false;
     }
+    e.group.position.x=nextX;e.group.position.z=nextZ;
     face(e, destination);
     return true;
   }
@@ -229,6 +232,10 @@ export function createEntities(THREE, scene) {
       wanderer.patrol.set(-25, 0, 22);
       flora.aware = false;
       flora.attracted = false;
+      flora.identified = false;
+      flora.studyTime = 0;
+      flora.creakTimer = 0;
+      flora.setCamouflaged(true);
       impostor.revealed = false;
       impostor.pleaded = false;
       impostor.observedTime = 0;
@@ -276,14 +283,25 @@ export function createEntities(THREE, scene) {
       flora.noiseTarget.copy(ctx.player);
     }
     // Quiet travelers do not wake it. Noise draws it close enough to see you.
-    if (flora.attracted && fd < 14) flora.aware = true;
+    const floraEyes = flora.group.position.clone();
+    floraEyes.y += flora.metadata.sightHeight ?? 3.2;
+    if (flora.attracted && fd < 14 && !ctx.inside &&
+        (!ctx.isSightBlocked || !ctx.isSightBlocked(floraEyes,ctx.player))) flora.aware = true;
     const frozen = observed(flora, ctx, 0.67);
     flora.moving = (flora.aware || flora.attracted) && !frozen && !ctx.inside;
+    flora.setCamouflaged(frozen || !flora.moving);
     if (flora.moving) {
       const destination = flora.aware ? ctx.player : flora.noiseTarget;
       move(flora, destination, 1.45 + currentDay * 0.16, dt);
       if (!flora.aware && distance(flora, flora.noiseTarget) < 1) flora.attracted = false;
       cue(flora, dt, ctx, 'rustle', 1.4, 35);
+      flora.creakTimer-=dt;
+      if(flora.creakTimer<=0 && fd<32){ctx.sound('wood-creak',flora.group.position);flora.creakTimer=1.6;}
+    }
+    flora.animate(elapsed,flora.moving,frozen || !flora.moving);
+    if (!flora.identified) {
+      flora.studyTime = fd < 9 && observed(flora,ctx,.985) ? flora.studyTime + dt : 0;
+      if (flora.studyTime >= 2.4) flora.identified = true;
     }
     if (!ctx.inside && fd < 1.25 && flora.moving) ctx.kill('A Flora Tímida se aproximou quando você desviou o olhar. Observe-a enquanto recua e evite fazer barulho.');
 
@@ -549,10 +567,12 @@ export function createEntities(THREE, scene) {
     for (const e of list) {
       if (!e.active) continue;
       target.copy(e.group.position);
-      target.y += e.id === 'flora' ? 2.15 : 1.5;
+      if (e === flora && !flora.identified) continue;
+      target.y += e.id === 'flora' ? 2.65 : 1.5;
       direction.copy(target).sub(origin);
       const d = direction.length();
-      if (d < nearestD && direction.normalize().dot(cameraDirection) > 0.985) {
+      if (d < nearestD && direction.normalize().dot(cameraDirection) > 0.985 &&
+          (!lastCtx?.isSightBlocked || !lastCtx.isSightBlocked(origin,target))) {
         nearestD = d;
         nearest = e;
       }

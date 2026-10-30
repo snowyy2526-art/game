@@ -1,4 +1,5 @@
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { createWoodlandTreeGeometry } from './models/woodland.js';
 
 // Deterministic, entirely local scenery. No texture or model downloads are needed.
 export function createWorld(THREE, scene, { lowQuality = false } = {}) {
@@ -73,7 +74,6 @@ export function createWorld(THREE, scene, { lowQuality = false } = {}) {
   const wood = mat('#a28a67', { map: woodTexture });
   const darkWood = mat('#6b624e', { map: woodTexture });
   const bark = mat('#b7b99b', { map: barkTexture });
-  const leaves = mat('#667a5b', { flatShading: true });
   const stone = mat('#666e62', { flatShading: true });
   const rusty = mat('#926b47', { metalness: .35, roughness: .8 });
   const black = mat('#171b16');
@@ -100,49 +100,105 @@ export function createWorld(THREE, scene, { lowQuality = false } = {}) {
     parent.add(mesh); return mesh;
   }
 
-  // Layered, instanced trees keep the forest dense without excessive draw calls.
-  const treePositions = [];
-  for (let i = 0; i < 390; i++) {
-    const angle = random() * Math.PI * 2;
-    const radius = 10.8 + Math.sqrt(random()) * 83;
-    const x = Math.cos(angle) * radius, z = Math.sin(angle) * radius;
-    // The narrow approach to the front door stays readable in the opening shot.
-    if (z > 4 && z < 28 && Math.abs(x) < 2.8) continue;
-    // Keep a wide camera-to-cabin sightline open, including the crown radius.
-    // This is a real forest clearing, so the same path is navigable in play.
-    const projection = Math.max(0, Math.min(1, (x * 18 + z * 22) / 808));
-    const distanceToApproach = Math.hypot(x - projection * 18, z - projection * 22);
-    if (radius < 36 && distanceToApproach < 9) continue;
-    treePositions.push({ x, z, height: between(10, 23), radius: between(.25, .6), color: random() });
+  // The same crooked broadleaf language as Flora: bark knots, roots, forked
+  // branches and olive/ochre leaf sprigs. No cone crowns or giant pine trunks.
+  const forestPaths = [
+    [[0, 5], [0, 15], [-3, 24], [2, 33], [7, 43], [4, 56]],
+    [[-7, -6], [-16, -11], [-22, -23], [-32, -29], [-43, -37], [-52, -43]],
+    [[7, -5], [16, -8], [25, -12], [33, -19], [44, -23], [53, -32]],
+  ];
+  function distanceToSegment(x, z, a, b) {
+    const dx = b[0] - a[0], dz = b[1] - a[1];
+    const t = Math.max(0, Math.min(1, ((x - a[0]) * dx + (z - a[1]) * dz) / (dx * dx + dz * dz)));
+    return Math.hypot(x - a[0] - dx * t, z - a[1] - dz * t);
   }
-  const trunks = new THREE.InstancedMesh(cylinderGeometry, bark, treePositions.length);
-  const crowns = new THREE.InstancedMesh(coneGeometry, leaves, treePositions.length * 3);
-  const limbs = new THREE.InstancedMesh(cylinderGeometry, bark, treePositions.length * 3);
-  const dummy = new THREE.Object3D();
-  treePositions.forEach((tree, i) => {
-    dummy.position.set(tree.x, tree.height / 2, tree.z);
-    dummy.rotation.set(0, tree.color * 6, between(-.025, .025));
-    dummy.scale.set(tree.radius, tree.height, tree.radius);
-    dummy.updateMatrix(); trunks.setMatrixAt(i, dummy.matrix);
-    trunks.setColorAt(i, new THREE.Color().setHSL(.12, .09, .57 + tree.color * .18));
-    for (let k = 0; k < 3; k++) {
-      const crownHeight = tree.height * (.48 - k * .055);
-      dummy.position.set(tree.x, tree.height * (.57 + k * .14), tree.z);
-      dummy.rotation.set(0, tree.color * 8 + k, 0);
-      dummy.scale.set(tree.height * (.21 - k * .041), crownHeight, tree.height * (.21 - k * .041));
-      dummy.updateMatrix(); crowns.setMatrixAt(i * 3 + k, dummy.matrix);
-      crowns.setColorAt(i * 3 + k, new THREE.Color().setHSL(.27 + tree.color * .04, .2, .39 + tree.color * .16));
-      const theta = tree.color * 15 + k * 2.15;
-      dummy.position.set(tree.x + Math.sin(theta) * .6, tree.height * (.31 + k * .14), tree.z + Math.cos(theta) * .6);
-      dummy.rotation.set(Math.cos(theta) * .9, theta, Math.sin(theta) * .9);
-      dummy.scale.set(tree.radius * .38, 2.5, tree.radius * .38);
-      dummy.updateMatrix(); limbs.setMatrixAt(i * 3 + k, dummy.matrix);
+  function onForestPath(x, z, margin = 1.45) {
+    return forestPaths.some(path => path.some((p, i) => i && distanceToSegment(x, z, path[i - 1], p) < margin));
+  }
+  const protectedPoints = [[7, 9], [-7, 10], [9, 0], [-23, -19], [25, -25], [20, 18]];
+  function protectedGround(x, z, radius = 0) {
+    if (x > -1 && x < 8.1 && z > 7.3 && z < 11.9) return true;
+    if (protectedPoints.some(p => Math.hypot(x - p[0], z - p[1]) < 1.35 + radius)) return true;
+    if (onForestPath(x, z, 1.35 + radius)) return true;
+    // A narrower genuine clearing keeps the opening cabin view legible while
+    // allowing far more trees around it than the former nine-metre corridor.
+    return Math.hypot(x, z) < 31 && distanceToSegment(x, z, [0, 0], [15, 18]) < 3.6 + radius;
+  }
+  const trees = [];
+  const addTrees = (count, inner, outer) => {
+    let attempts = 0;
+    while (count > 0 && attempts++ < 30000) {
+      const angle = random() * Math.PI * 2;
+      const distance = Math.sqrt(inner * inner + random() * (outer * outer - inner * inner));
+      const x = Math.cos(angle) * distance, z = Math.sin(angle) * distance;
+      const height = between(4.65, 7.4), radius = between(.29, .43);
+      if (protectedGround(x, z, radius)) continue;
+      if (trees.some(t => Math.hypot(x - t.x, z - t.z) < Math.max(1.75, radius + t.radius + .68))) continue;
+      trees.push({ x, z, height, radius, variant: Math.floor(random() * 4), rotation: random() * Math.PI * 2, trunkHeight: height * .71, lowDetail: distance > 55 });
+      count--;
     }
-    if (Math.hypot(tree.x, tree.z) < 57) obstacles.push({ x: tree.x, z: tree.z, radius: tree.radius + .22 });
-  });
-  trunks.castShadow = crowns.castShadow = true;
-  trunks.receiveShadow = true;
-  root.add(trunks, crowns, limbs);
+    if (count) throw new Error('Não foi possível distribuir as árvores sem bloquear os caminhos.');
+  };
+  addTrees(600, 10.4, 64);
+  addTrees(180, 64, 94);
+  const treeMaterial = mat('#ffffff', { vertexColors: true, side: THREE.DoubleSide });
+  const dummy = new THREE.Object3D();
+  const treeMeshes = [];
+  let forestTriangles = 0;
+  for (const lowDetail of [false, true]) for (let variant = 0; variant < 4; variant++) {
+    const selected = trees.filter(t => t.variant === variant && t.lowDetail === lowDetail);
+    if (!selected.length) continue;
+    const geometry = createWoodlandTreeGeometry(THREE, { seed: 811 + variant * 127, height: 5.8, lowDetail });
+    const instanced = new THREE.InstancedMesh(geometry, treeMaterial, selected.length);
+    instanced.name = lowDetail ? 'distant-crooked-broadleaf-trees' : 'crooked-broadleaf-trees';
+    selected.forEach((tree, i) => {
+      dummy.position.set(tree.x, 0, tree.z); dummy.rotation.set(0, tree.rotation, 0);
+      const scale = tree.height / 5.8;
+      dummy.scale.set(scale, scale, scale); dummy.updateMatrix(); instanced.setMatrixAt(i, dummy.matrix);
+      tree.trunkHeight = geometry.userData.trunkHeight * scale;
+      tree.radius = geometry.userData.trunkRadius * scale + .10;
+      tree.mesh = instanced; tree.instanceId = i;
+    });
+    instanced.castShadow = !lowDetail; instanced.receiveShadow = true;
+    instanced.computeBoundingSphere(); root.add(instanced); treeMeshes.push(instanced);
+    forestTriangles += geometry.attributes.position.count / 3 * selected.length;
+  }
+  for (const tree of trees) if (Math.hypot(tree.x, tree.z) < 68) obstacles.push({ x: tree.x, z: tree.z, radius: tree.radius, kind: 'tree' });
+  const forestMetrics = {
+    treeCount: trees.length, minHeight: Math.min(...trees.map(t => t.height)), maxHeight: Math.max(...trees.map(t => t.height)),
+    playableTreeCount: trees.filter(t => Math.hypot(t.x, t.z) <= 64).length,
+    treeDrawCalls: treeMeshes.length, triangles: forestTriangles, style: 'crooked-broadleaf',
+  };
+  function isSightBlocked(from, to) {
+    const dx = to.x - from.x, dz = to.z - from.z, lengthSq = dx * dx + dz * dz;
+    if (lengthSq > .000001) for (const tree of trees) {
+      const t = ((tree.x - from.x) * dx + (tree.z - from.z) * dz) / lengthSq;
+      if (t <= .015 || t >= .985) continue;
+      const y = from.y + (to.y - from.y) * t;
+      if (y < 0 || y > tree.trunkHeight) continue;
+      if (Math.hypot(from.x + dx * t - tree.x, from.z + dz * t - tree.z) < tree.radius) return true;
+    }
+    // Opaque cabin walls interrupt observation. The open daytime door and
+    // actual window openings remain transparent to the player's sightline.
+    for (const side of [-1, 1]) {
+      if (Math.abs(dx) > .000001) {
+        const t = (side * 4.8 - from.x) / dx;
+        if (t > .001 && t < .999) {
+          const z = from.z + dz * t, y = from.y + (to.y - from.y) * t;
+          if (Math.abs(z) < 4 && y > 0 && y < 3.15 && !(Math.abs(z) < 1 && y > 1.05 && y < 2.4)) return true;
+        }
+      }
+      if (Math.abs(dz) > .000001) {
+        const t = (side * 4 - from.z) / dz;
+        if (t > .001 && t < .999) {
+          const x = from.x + dx * t, y = from.y + (to.y - from.y) * t;
+          const doorway = side > 0 && phase === 'day' && Math.abs(x) < .9 && y < 2.64;
+          if (Math.abs(x) < 4.8 && y > 0 && y < 3.15 && !doorway) return true;
+        }
+      }
+    }
+    return false;
+  }
 
   // Ferns, fallen needles, stumps and stone clusters fill the ground plane.
   const fernMaterial = mat('#45533a', { side: THREE.DoubleSide });
@@ -162,22 +218,28 @@ export function createWorld(THREE, scene, { lowQuality = false } = {}) {
     const theta = random() * Math.PI * 2, radius = between(12, 65);
     const x = Math.cos(theta) * radius, z = Math.sin(theta) * radius;
     const size = between(.3, 1.3);
+    if (protectedGround(x, z, size * .8)) continue;
     const rock = new THREE.Mesh(rockGeometry, stone);
     rock.position.set(x, size * .35, z); rock.scale.set(size, size * .65, size * .8);
     rock.rotation.y = random() * 6; rock.castShadow = true; rock.receiveShadow = true;
     root.add(rock);
-    if (size > .8) obstacles.push({ x, z, radius: size * .8 });
+    if (size > .8) obstacles.push({ x, z, radius: size * .8, kind: 'rock' });
   }
 
-  // A dirt path built from shallow overlapping ellipses.
-  const pathMat = mat('#514b37', { transparent: true, opacity: .72 });
-  for (let i = 0; i < 11; i++) {
-    const path = new THREE.Mesh(new THREE.CircleGeometry(1, 16), pathMat);
-    path.rotation.x = -Math.PI / 2;
-    path.position.set(Math.sin(i * .55) * .7, .016, 5 + i * 2.3);
-    path.scale.set(1.25 + i * .045, 2.1, 1);
-    root.add(path);
+  // Connected winding paths give the denser forest readable routes back.
+  const pathMat = mat('#8d8060', { map: groundTexture });
+  const pathPatches = [];
+  for (const path of forestPaths) for (let segment = 1; segment < path.length; segment++) {
+    const a = path[segment - 1], b = path[segment], length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const steps = Math.ceil(length / 1.25);
+    for (let i = 0; i <= steps; i++) pathPatches.push([a[0] + (b[0] - a[0]) * i / steps, a[1] + (b[1] - a[1]) * i / steps]);
   }
+  const path = new THREE.InstancedMesh(new THREE.CircleGeometry(1, 12), pathMat, pathPatches.length);
+  pathPatches.forEach(([x, z], i) => {
+    dummy.position.set(x, .017, z); dummy.rotation.set(-Math.PI / 2, 0, 0); dummy.scale.set(1.1, 1.1, 1);
+    dummy.updateMatrix(); path.setMatrixAt(i, dummy.matrix);
+  });
+  path.name = 'winding-forest-trails'; root.add(path);
 
   const cabin = new THREE.Group(); root.add(cabin);
   // Individual floor planks, supporting beams and log walls.
@@ -406,8 +468,7 @@ export function createWorld(THREE, scene, { lowQuality = false } = {}) {
       flame.scale.y = flame.userData.baseHeight * (1 + .25 * Math.sin(time * 7 + i * 2.4));
       flame.rotation.z = .15 * Math.sin(time * 5 + i);
     }
-    // A held breath of movement in the treetops, while trunks stay collision-stable.
-    crowns.rotation.z = Math.sin(time * .16) * .0008;
+    // Trees and a watched Flora remain equally still, preserving camouflage.
   }
   // Software renderers are especially sensitive to the hundreds of separate
   // planks and props. Bake only the immutable scenery; interaction groups and
@@ -494,7 +555,7 @@ export function createWorld(THREE, scene, { lowQuality = false } = {}) {
   }
   if (lowQuality) { batchStaticScenery(); batchResourceParts(); }
   setPhase('day');
-  return { entrances, resources, obstacles, fireplace, setPhase, update, resetResources, setEntranceHealth,
+  return { entrances, resources, obstacles, fireplace, trees, forestMetrics, forestPaths, isSightBlocked, setPhase, update, resetResources, setEntranceHealth,
     dispose() {
       scene.remove(root);
       const geometries = new Set(); root.traverse(o => { if (o.geometry) geometries.add(o.geometry); });

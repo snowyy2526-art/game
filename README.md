@@ -29,6 +29,8 @@ Se a captura do mouse for bloqueada pela prévia, segure o botão direito e arra
 
 O Andarilho usa um modelo 3D articulado adaptado da referência visual enviada pelo criador do projeto: cerca de 2,10 m, rosto de boca aberta e olhos fundos, corpo esquelético, capa malva rasgada, faixas, bermuda remendada, cordas na cintura, mochila e facão na bainha. A respiração, o andar assimétrico e os dedos pendentes fazem parte da animação. O Impostor também copia essa aparência ao se disfarçar de Andarilho.
 
+A Flora Tímida também segue a referência enviada pelo criador: cerca de 4,5 m na postura ativa, casca retorcida, marcas oculares, dedos de galho e pés de raízes. Quando para, une as pernas e ergue os braços, chegando a cerca de 5,8 m. A floresta tem 780 árvores de 4,65 a 7,40 m, com a mesma paleta, folhas e nós na casca; 600 ficam na área explorável. Trilhas e a clareira da cabana continuam transitáveis. Troncos e paredes interrompem a visão. Para identificar a entidade camuflada, observe de perto as marcas na casca; um rótulo não revela imediatamente sua presença.
+
 Cada dia dura 3 minutos e cada noite 1 minuto e 40 segundos. O jogo termina em vitória somente ao amanhecer após a quinta noite. Você pode encerrar o período diurno antes, pelo menu de construção, estando dentro da cabana. Os menus pausam a simulação.
 
 Durante o dia, colete madeira (troncos), sucata (caixas) e comida (cogumelos). Suprimentos reaparecem a cada amanhecer. Reforce as três entradas, fabrique lanças, alimente-se e abasteça a lareira. Você começa com alguns materiais, comida e fogo suficientes para aprender os controles.
