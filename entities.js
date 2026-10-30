@@ -1,5 +1,13 @@
 import { createWandererModel } from './models/wanderer.js';
 import { createFloraModel } from './models/flora.js';
+import { WANDERER_AUDIO_TIMING } from './audio/wanderer-timing.js';
+
+// A full sprint lasts a little longer than one charge. The warning is time to
+// get clear, and exhaustion is a real escape window rather than an idle pose.
+export const WANDERER_RULES = Object.freeze({
+  sightDistance: 17, chaseSpeed: 6.5, chaseDuration: 3.8,
+  recoveryDuration: 20, patrolGrace: 3, catchDistance: 1.05,
+});
 
 /** Procedural creatures and their readable, distinct survival rules. */
 export function createEntities(THREE, scene) {
@@ -89,7 +97,12 @@ export function createEntities(THREE, scene) {
 
   const wanderer = add('wanderer', 'O Andarilho', createWandererModel(THREE), 25, -25);
   wanderer.patrol = v();
+  wanderer.lastSeen = v();
   wanderer.aware = false;
+  wanderer.mode = 'patrol';
+  wanderer.alertClipIndex = 0;
+  wanderer.alertDuration = 3.52;
+  wanderer.grace = 0;
 
   const flora = add('flora', 'Flora Tímida', createFloraModel(THREE), -23, -19);
   flora.aware = false;
@@ -198,7 +211,7 @@ export function createEntities(THREE, scene) {
   }
 
   function animate(e, time, speed = 1) {
-    if (e.animate) { e.animate(time, e.moving); return; }
+    if (e.animate) { e.animate(time, e.moving, e.id === 'wanderer' ? e.mode : undefined); return; }
     if (!e.legs) return;
     e.legs.forEach((leg, i) => { leg.rotation.x = e.moving ? Math.sin(time * speed + i * Math.PI) * 0.24 : 0; });
     e.arms.forEach((arm, i) => { arm.rotation.x = e.moving ? Math.sin(time * speed + i * Math.PI + 0.6) * 0.19 : 0; });
@@ -227,6 +240,12 @@ export function createEntities(THREE, scene) {
       e.resetPose?.();
       e.group.position.set(e.baseX, 0, e.baseZ);
     }
+    wanderer.mode = phase === 'day' ? 'patrol' : 'inactive';
+    wanderer.aware = false;
+    wanderer.grace = 0;
+    wanderer.alertClipIndex = 0;
+    wanderer.alertDuration = WANDERER_AUDIO_TIMING.alert[0] + 0.4;
+    wanderer.lastSeen.set(wanderer.baseX, 0, wanderer.baseZ);
     if (phase === 'day') {
       wanderer.aware = false;
       wanderer.patrol.set(-25, 0, 22);
@@ -262,20 +281,80 @@ export function createEntities(THREE, scene) {
     }
   }
 
-  function updateDay(dt, ctx) {
+  function wandererMode(mode) {
+    wanderer.mode = mode;
+    wanderer.timer = 0;
+    wanderer.moving = false;
+    wanderer.aware = mode === 'alert' || mode === 'chase';
+  }
+
+  function exhaustWanderer(ctx) {
+    if (wanderer.mode === 'exhausted') return;
+    wandererMode('exhausted');
+    ctx?.toast?.('O Andarilho perdeu o fôlego. Afaste-se enquanto ele se recupera.');
+  }
+
+  function updateWanderer(dt, ctx) {
+    if (wanderer.mode === 'capture') return true;
     const wd = distance(wanderer, ctx.player);
-    if (wd < 17 || (ctx.noise > 0.4 && wd < 30)) wanderer.aware = true;
-    if (wd > 42) wanderer.aware = false;
+    target.copy(wanderer.group.position); target.y += 1.8;
+    const seesPlayer = !ctx.inside && wd < WANDERER_RULES.sightDistance &&
+      (!ctx.isSightBlocked || !ctx.isSightBlocked(target, ctx.player));
+    wanderer.grace = Math.max(0, wanderer.grace - dt);
+    wanderer.timer += dt;
     const effort = 0.52 + Math.max(0, Math.sin(elapsed * 2.5)) * 0.55;
-    if (wanderer.aware) {
-      wanderer.moving = move(wanderer, ctx.player, (0.72 + currentDay * 0.07) * effort, dt);
-      if (!ctx.inside && wd < 1.05) ctx.kill('O Andarilho alcançou você. A respiração pesada era um aviso: conserve seu fôlego e mantenha distância.');
+
+    if (ctx.inside && (wanderer.mode === 'alert' || wanderer.mode === 'chase')) exhaustWanderer(ctx);
+
+    if (wanderer.mode === 'exhausted') {
+      wanderer.moving = false;
+      if (wanderer.timer >= WANDERER_RULES.recoveryDuration) {
+        wandererMode('patrol');
+        wanderer.grace = WANDERER_RULES.patrolGrace;
+        // Do not make his first patrol step point straight at the survivor.
+        wanderer.patrol.copy(wanderer.group.position).add(new THREE.Vector3(8, 0, -7));
+      }
+    } else if (wanderer.mode === 'alert') {
+      if (seesPlayer) wanderer.lastSeen.copy(ctx.player).setY(0);
+      face(wanderer, wanderer.lastSeen);
+      wanderer.moving = false;
+      if (wanderer.timer >= wanderer.alertDuration) wandererMode('chase');
+    } else if (wanderer.mode === 'chase') {
+      if (seesPlayer) wanderer.lastSeen.copy(ctx.player).setY(0);
+      if (wanderer.timer >= WANDERER_RULES.chaseDuration) {
+        exhaustWanderer(ctx);
+      } else {
+        wanderer.moving = move(wanderer, wanderer.lastSeen, WANDERER_RULES.chaseSpeed, dt);
+        const close = distance(wanderer, ctx.player) < WANDERER_RULES.catchDistance;
+        if (close && seesPlayer) {
+          wandererMode('capture');
+          face(wanderer, ctx.player);
+          if (ctx.captureWanderer) ctx.captureWanderer(wanderer);
+          else ctx.kill('O Andarilho alcançou você. Corra durante a investida e afaste-se enquanto ele recupera o fôlego.');
+          return true;
+        }
+      }
+    } else if (seesPlayer && wanderer.grace <= 0) {
+      wandererMode('alert');
+      wanderer.lastSeen.copy(ctx.player).setY(0);
+      wanderer.alertClipIndex = Math.floor(Math.random() * WANDERER_AUDIO_TIMING.alert.length);
+      wanderer.alertDuration = WANDERER_AUDIO_TIMING.alert[wanderer.alertClipIndex] + 0.4;
+      face(wanderer, ctx.player);
+      ctx.toast?.('O Andarilho viu você. Afaste-se e guarde o fôlego para a corrida.');
     } else {
+      // Sound draws his patrol toward a remembered location; it cannot reveal
+      // a player through a trunk or the cabin wall and start a blind charge.
+      if (!ctx.inside && ctx.noise > 0.4 && wd < 30 && wanderer.grace <= 0) wanderer.patrol.copy(ctx.player).setY(0);
       if (distance(wanderer, wanderer.patrol) < 2) wanderer.patrol.set(Math.sin(elapsed * 0.1) * 34, 0, Math.cos(elapsed * 0.08) * 32);
       wanderer.moving = move(wanderer, wanderer.patrol, 0.43 * effort, dt);
     }
-    cue(wanderer, dt, ctx, 'breath', 3.5, 25);
     animate(wanderer, elapsed, 2.5);
+    return false;
+  }
+
+  function updateDay(dt, ctx) {
+    // Capture owns the camera and model until its cinematic is complete.
+    if (updateWanderer(dt, ctx)) return;
 
     const fd = distance(flora, ctx.player);
     if (ctx.noise > 0.25 && fd < 32) {
@@ -536,7 +615,10 @@ export function createEntities(THREE, scene) {
       }
     } else if (nearest === wanderer) {
       direction.copy(nearest.group.position).sub(origin).setY(0).normalize();
-      nearest.group.position.addScaledVector(direction, 3);
+      // Preserve the knockback while respecting the now much denser trunks.
+      const destination = nearest.group.position.clone().addScaledVector(direction, 3);
+      for (let i = 0; i < 12; i++) move(nearest, destination, 3, 1 / 12);
+      if (wanderer.mode !== 'capture') exhaustWanderer(lastCtx);
       lastCtx?.toast('O golpe fez o Andarilho recuar. Aproveite para fugir.');
     } else if (nearest === impostor && !nearest.revealed) {
       nearest.revealed = true;
@@ -557,7 +639,7 @@ export function createEntities(THREE, scene) {
     let nearest = null;
     let nearestD = 28;
     const descriptions = {
-      wanderer: 'Uma respiração difícil. Passos lentos, pesados. Mantenha distância.',
+      wanderer: wanderer.mode === 'exhausted' ? 'Sem fôlego. Aproveite para se afastar.' : wanderer.mode === 'alert' ? 'Ele está se preparando. Corra quando a investida começar.' : wanderer.mode === 'chase' ? 'CORRA. Ele não consegue manter esse ritmo por muito tempo.' : 'Uma voz baixa entre as árvores. Guarde fôlego para a investida.',
       flora: 'Os galhos se aquietam quando você olha. Não vire as costas.',
       impostor: impostor.revealed ? 'A máscara caiu. Fuja.' : impostor.disguise === 'object' ? 'Essa caixa... tem dentes sob a tampa.' : impostor.disguise === 'human' ? 'Um dos pés está virado para trás. Não se aproxime.' : 'Ele se move de costas. Algo está errado.',
       invader: `O Invasor · vigor ${Math.max(0, Math.ceil(invader.vigor))}%`,

@@ -1,0 +1,91 @@
+import { test, expect } from '@playwright/test';
+
+test('the original recordings decode and the moving voice changes ears and fades beyond its range',async({page})=>{
+  const errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.goto('/tests/fixtures/wanderer-encounter.html');
+  await page.waitForFunction(()=>window.__encounter);
+  await page.locator('#start').click();
+  await page.waitForFunction(()=>window.__encounter.audio.debug.decodedClips===14);
+  expect(await page.evaluate(()=>window.__encounter.audio.debug.failedClips)).toBe(0);
+  await page.evaluate(()=>window.__encounter.set('chase'));
+  await page.waitForTimeout(800);
+  expect(await page.evaluate(()=>window.__encounter.panner)).toEqual({model:'HRTF',distanceModel:'inverse'});
+  const right=await page.evaluate(()=>window.__encounter.measure());
+  expect(right[1]).toBeGreaterThan(.001);
+  expect(right[1]).toBeGreaterThan(right[0]*1.1);
+  await page.evaluate(()=>window.__encounter.set('chase',{x:3,y:0,z:-2},{x:0,y:0,z:1}));
+  await page.waitForTimeout(250);
+  const left=await page.evaluate(()=>window.__encounter.measure());
+  expect(left[0]).toBeGreaterThan(left[1]*1.1);
+  await page.evaluate(()=>window.__encounter.set('chase',{x:20,y:0,z:-2}));
+  await page.waitForTimeout(700);
+  const distant=await page.evaluate(()=>window.__encounter.measure());
+  expect(Math.max(...distant)).toBeLessThan(.000001);
+  await page.evaluate(()=>window.__encounter.set('exhausted',{x:2,y:0,z:-2}));
+  let voice=await page.evaluate(()=>window.__encounter.audio.debug);
+  expect(voice.looping).toBe(false);
+  expect(voice.currentClip).toContain('Ofegante');
+  await page.evaluate(()=>window.__encounter.audio.setPaused(true));
+  await page.waitForFunction(()=>window.__encounter.audio.debug.contextState==='suspended');
+  const paused=await page.evaluate(()=>window.__encounter.audioTime);
+  await page.waitForTimeout(250);
+  expect(await page.evaluate(()=>window.__encounter.audioTime)).toBe(paused);
+  await page.evaluate(()=>window.__encounter.audio.setPaused(false));
+  await page.waitForFunction(()=>window.__encounter.audio.debug.contextState==='running');
+  voice=await page.evaluate(()=>window.__encounter.audio.debug);
+  expect(voice.currentClip).toContain('Ofegante');
+  await page.evaluate(()=>window.__encounter.set('inactive'));
+  expect(await page.evaluate(()=>window.__encounter.audio.debug.playing)).toBe(false);
+  expect(errors).toEqual([]);
+});
+
+test('an actual encounter lifts the player, pauses during capture and ends only after the scene',async({page})=>{
+  const errors=[];
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.addInitScript(()=>{
+    HTMLCanvasElement.prototype.requestPointerLock=()=>Promise.resolve();
+  });
+  // Move only the initial spawn into the starter clearing. All state changes,
+  // camera work, input and audio run through the production game unchanged.
+  await page.route('**/entities.js*',async route=>{
+    const response=await route.fetch();
+    const source=await response.text();
+    const replacement=source.replace("createWandererModel(THREE), 25, -25)","createWandererModel(THREE), 0, 12)");
+    expect(replacement).not.toBe(source);
+    await route.fulfill({response,body:replacement});
+  });
+  await page.goto('/');
+  await page.waitForFunction(()=>window.__game);
+  await page.locator('#start-button').click();
+  await page.waitForFunction(()=>window.__game.entities.find(e=>e.id==='wanderer').mode==='alert');
+  await page.waitForFunction(()=>window.__game.audio.decodedClips===14);
+  expect((await page.evaluate(()=>window.__game.audio)).currentMode).toBe('alert');
+  await page.waitForFunction(()=>window.__game.mode==='capturing');
+  await expect(page.locator('#end-panel')).toBeHidden();
+  await expect(page.locator('#hud')).toBeHidden();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('#craft-panel')).toBeHidden();
+  await page.waitForFunction(()=>window.__game.capture.progress>.52);
+  expect((await page.evaluate(()=>window.__game.camera)).y).toBeGreaterThan(2.6);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('#pause-panel')).toBeVisible();
+  const capture=await page.evaluate(()=>window.__game.capture.progress);
+  await page.screenshot({path:'/tmp/andarilho-captura-pausa.png'});
+  await page.waitForTimeout(350);
+  expect(await page.evaluate(()=>window.__game.capture.progress)).toBe(capture);
+  await page.locator('#resume-button').click();
+  await page.waitForFunction(()=>window.__game.mode==='capturing');
+  await page.screenshot({path:'/tmp/andarilho-captura.png'});
+  await page.waitForFunction(()=>window.__game.mode==='ended');
+  await expect(page.locator('#end-panel')).toBeVisible();
+  await expect(page.locator('#end-description')).toContainText('pescoço');
+  expect(await page.evaluate(()=>window.__game.audio.playing)).toBe(false);
+  await page.locator('#end-restart').click();
+  await page.waitForFunction(()=>window.__game.mode==='playing');
+  await expect(page.locator('#capture-shade')).toBeHidden();
+  await expect(page.locator('#hud')).toBeVisible();
+  expect(await page.evaluate(()=>window.__game.capture)).toBe(null);
+  await page.waitForFunction(()=>window.__game.camera.y<1.8);
+  expect(errors).toEqual([]);
+});

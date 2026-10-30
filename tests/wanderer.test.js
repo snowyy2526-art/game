@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as THREE from 'three';
 import { createWandererModel } from '../models/wanderer.js';
-import { createEntities } from '../entities.js';
+import { createEntities, WANDERER_RULES } from '../entities.js';
+import { WANDERER_AUDIO_TIMING } from '../audio/wanderer-timing.js';
 
 test('the reference-based Wanderer is a grounded full-height 3D model with finite, renderable geometry',()=>{
   const model=createWandererModel(THREE);
@@ -44,7 +45,7 @@ test('the laborious gait animates limbs without taking control of AI position or
   first.legs.forEach((leg,i)=>assert.ok(leg.quaternion.angleTo(rest[i])<.05,'idle breathing must not become a walking stride'));
 });
 
-test('the new appearance keeps slow pursuit, heavy-breath cues and spear knockback working',()=>{
+test('the warning holds the Wanderer still and a spear interrupts the charge into recovery',()=>{
   const entities=createEntities(THREE,new THREE.Scene());
   const wanderer=entities.list.find(e=>e.id==='wanderer');
   const sounds=[],deaths=[];
@@ -52,14 +53,114 @@ test('the new appearance keeps slow pursuit, heavy-breath cues and spear knockba
   const start=wanderer.group.position.clone();
   for(let frame=0;frame<60;frame++){ctx.time=frame/60;entities.update(1/60,ctx);}
   const travel=start.distanceTo(wanderer.group.position);
-  assert.ok(travel>.1 && travel<1.5,'the redesign must preserve the slow pursuit');
-  assert.ok(sounds.includes('breath'));
+  assert.equal(travel,0,'the warning must allow the player to react before the charge');
+  assert.equal(wanderer.mode,'alert');
+  assert.ok(!sounds.includes('breath'),'dedicated positional MP3s replace the old generic cue');
   ctx.player.copy(wanderer.group.position).add(new THREE.Vector3(0,1.7,2.5));
   ctx.cameraDirection.copy(wanderer.group.position).add(new THREE.Vector3(0,1.25,0)).sub(ctx.player).normalize();
   const closeDistance=wanderer.group.position.distanceTo(ctx.player);
   assert.equal(entities.hit(ctx.player,ctx.cameraDirection),true);
   assert.ok(wanderer.group.position.distanceTo(ctx.player)>closeDistance+2);
+  assert.equal(wanderer.mode,'exhausted');
   assert.deepEqual(deaths,[]);
+});
+
+function chaseScenario(distance=7){
+  const entities=createEntities(THREE,new THREE.Scene());
+  const wanderer=entities.list.find(e=>e.id==='wanderer');
+  for(const e of entities.list)if(e!==wanderer)e.group.position.set(1000,0,1000);
+  const captures=[],deaths=[],messages=[];
+  const ctx={player:new THREE.Vector3(25,1.7,-25+distance),cameraDirection:new THREE.Vector3(0,0,-1),phase:'day',day:1,phaseTime:0,noise:0,inside:false,fire:50,entrances:[],bracing:null,time:0,kill:reason=>deaths.push(reason),captureWanderer:entity=>captures.push(entity),toast:message=>messages.push(message),sound:()=>{},damage:()=>{}};
+  const step=(seconds,beforeFrame=()=>{})=>{
+    for(let remaining=seconds;remaining>.000001;remaining-=.02){
+      const dt=Math.min(.02,remaining);beforeFrame(dt);ctx.time+=dt;entities.update(dt,ctx);
+    }
+  };
+  const startCharge=()=>{step(.02);assert.equal(wanderer.mode,'alert');step(wanderer.alertDuration+.04);assert.equal(wanderer.mode,'chase');};
+  return {entities,wanderer,ctx,step,startCharge,captures,deaths,messages};
+}
+
+test('alert waits for its complete warning recording before a fast, finite charge',()=>{
+  const {wanderer,step,ctx}=chaseScenario(12);
+  const start=wanderer.group.position.clone();
+  step(.02);
+  assert.equal(wanderer.mode,'alert');
+  assert.equal(wanderer.alertDuration,WANDERER_AUDIO_TIMING.alert[wanderer.alertClipIndex]+.4);
+  step(wanderer.alertDuration-.03);
+  assert.equal(wanderer.mode,'alert');
+  assert.ok(wanderer.group.position.distanceTo(start)<.000001);
+  step(.05);
+  assert.equal(wanderer.mode,'chase');
+  const chargeStart=wanderer.group.position.clone();
+  step(.5,dt=>{ctx.player.z+=6.1*dt;});
+  assert.ok(wanderer.group.position.distanceTo(chargeStart)>3,'the charge must run faster than a six-metre-per-second sprint');
+});
+
+test('running outlasts a charge and exhaustion gives a full recovery window before patrol grace',()=>{
+  const {wanderer,ctx,step,startCharge,captures,deaths}=chaseScenario();
+  startCharge();
+  step(WANDERER_RULES.chaseDuration+.1,dt=>{ctx.player.z+=6.1*dt;});
+  assert.equal(wanderer.mode,'exhausted');
+  assert.deepEqual(captures,[]);
+  const rest=wanderer.group.position.clone();
+  ctx.player.copy(rest).add(new THREE.Vector3(0,1.7,.5));
+  step(WANDERER_RULES.recoveryDuration-.3);
+  assert.equal(wanderer.mode,'exhausted');
+  assert.ok(wanderer.group.position.distanceTo(rest)<.000001,'exhaustion is stationary and cannot capture');
+  assert.deepEqual(captures,[]);
+  step(.4);
+  assert.equal(wanderer.mode,'patrol');
+  assert.ok(wanderer.grace>2.5,'returning to patrol must not immediately reacquire the player');
+  step(2);
+  assert.equal(wanderer.mode,'patrol');
+  assert.deepEqual(deaths,[]);
+});
+
+test('capture happens once after the warning and leaves the other day entities frozen',()=>{
+  const {entities,wanderer,step,startCharge,captures,deaths}=chaseScenario(2);
+  startCharge();
+  step(.4);
+  assert.equal(wanderer.mode,'capture');
+  assert.deepEqual(captures,[wanderer]);
+  assert.deepEqual(deaths,[],'the cinematic callback owns when the end screen appears');
+  const positions=entities.list.map(e=>e.group.position.clone());
+  step(3);
+  assert.equal(captures.length,1);
+  entities.list.forEach((e,i)=>assert.ok(e.group.position.distanceTo(positions[i])<.000001));
+});
+
+test('trees hide the player, noise only investigates, and entering the cabin safely ends the charge',()=>{
+  const {wanderer,ctx,step}=chaseScenario(12);
+  ctx.isSightBlocked=()=>true;ctx.noise=.9;
+  const start=wanderer.group.position.clone();
+  step(1);
+  assert.equal(wanderer.mode,'patrol');
+  assert.ok(wanderer.group.position.distanceTo(start)>.1,'he may follow the sound without seeing through the obstacle');
+  ctx.isSightBlocked=()=>false;ctx.noise=0;
+  step(.02);
+  assert.equal(wanderer.mode,'alert');
+  step(wanderer.alertDuration+.04);
+  assert.equal(wanderer.mode,'chase');
+  ctx.inside=true;step(.02);
+  assert.equal(wanderer.mode,'exhausted');
+  const rest=wanderer.group.position.clone();step(2);
+  assert.ok(wanderer.group.position.distanceTo(rest)<.000001);
+});
+
+test('a blocked escape route does not allow a charge through tree trunks and phase reset clears the encounter',()=>{
+  const {entities,wanderer,ctx,step,startCharge,captures}=chaseScenario(12);
+  ctx.isMovementBlocked=(x,z,radius)=>Math.hypot(x-25,z+20)<.8+radius;
+  startCharge();
+  step(1.4);
+  assert.ok(Math.hypot(wanderer.group.position.x-25,wanderer.group.position.z+20)>=1.03);
+  assert.ok(wanderer.group.position.z>-20,'local steering should continue around the tree');
+  entities.setPhase('night',1);
+  assert.equal(wanderer.mode,'inactive');assert.equal(wanderer.active,false);
+  entities.setPhase('day',2);
+  assert.equal(wanderer.mode,'patrol');assert.equal(wanderer.aware,false);
+  assert.equal(wanderer.timer,0);
+  assert.equal(wanderer.group.position.x,wanderer.baseX);
+  assert.deepEqual(captures,[]);
 });
 
 test('the Impostor copies the redesigned Wanderer but discards that disguise on reveal',()=>{

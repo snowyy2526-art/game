@@ -1,20 +1,163 @@
-/** A quiet, entirely procedural soundscape. No downloaded audio or autoplay. */
-export function createAudio() {
+/** Procedural ambience and the creator's quiet, spatial Wanderer recordings. */
+export function createAudio({wandererClips = {}, randomSource = Math.random} = {}) {
   let context = null;
   let master = null;
   let wind = null;
   let drone = null;
   let noiseBuffer = null;
   let muted = false;
+  let paused = false;
   let nextStep = 0;
   let nextBird = 0;
   let nextFire = 0;
   let state = { phase: 'day', inside: false, fire: 0 };
   const loops = [];
   const cooldowns = new Map();
+  const decoded = new Map();
+  const failed = new Set();
+  let loadGeneration = 0;
+  let wandererMode = 'inactive';
+  let wandererSource = null;
+  let wandererPanner = null;
+  let wandererLevel = null;
+  let wandererDistance = null;
+  let currentClip = null;
+  let voiceStarted = false;
+  let voiceIndex = 0;
+  let nextVoice = 0;
+  let lastPatrolIndex = -1;
+  const mouth = {x:0,y:1.8,z:0};
+  const listenerPosition = {x:0,y:1.7,z:0};
+  const listenerForward = {x:0,y:0,z:-1};
+  const hearingDistance = 16;
 
-  const random = (min, max) => min + Math.random() * (max - min);
-  const ready = () => context && context.state === 'running' && master;
+  const random = (min, max) => min + randomSource() * (max - min);
+  const ready = () => context && context.state === 'running' && master && !paused;
+
+  function setPoint(node, prefix, point) {
+    if (node[`${prefix}X`]) {
+      for (const axis of ['X','Y','Z']) node[`${prefix}${axis}`].value = point[axis.toLowerCase()];
+    } else if (prefix === 'position') node.setPosition?.(point.x,point.y,point.z);
+  }
+
+  function updateListener(position, forward) {
+    if (position) Object.assign(listenerPosition,{x:position.x,y:position.y,z:position.z});
+    if (forward) Object.assign(listenerForward,{x:forward.x,y:forward.y,z:forward.z});
+    if (!context?.listener) return;
+    const listener = context.listener;
+    setPoint(listener,'position',listenerPosition);
+    if (listener.forwardX) {
+      setPoint(listener,'forward',listenerForward);
+      setPoint(listener,'up',{x:0,y:1,z:0});
+    } else listener.setOrientation?.(listenerForward.x,listenerForward.y,listenerForward.z,0,1,0);
+    updateWandererPosition();
+  }
+
+  function updateWandererPosition() {
+    if (!wandererPanner) return;
+    setPoint(wandererPanner,'position',mouth);
+    // Panner maxDistance alone does not mute distant inverse-distance sources.
+    // Fade the last four metres, then enforce a real quiet-voice hearing radius.
+    const distance = Math.hypot(mouth.x-listenerPosition.x,mouth.y-listenerPosition.y,mouth.z-listenerPosition.z);
+    const attenuation = Math.max(0,Math.min(1,(hearingDistance-distance)/4));
+    wandererDistance.gain.setTargetAtTime(attenuation,context.currentTime,.035);
+  }
+
+  function clearWandererVoice() {
+    const source = wandererSource;
+    wandererSource = null;
+    if (source) {
+      source.onended = null;
+      try { source.stop(); } catch { /* Already ended. */ }
+      source.disconnect();
+    }
+    wandererLevel?.disconnect();
+    wandererPanner?.disconnect();
+    wandererDistance?.disconnect();
+    wandererLevel = wandererPanner = wandererDistance = currentClip = null;
+  }
+
+  function tickWanderer() {
+    if (!ready() || wandererMode === 'inactive' || wandererSource) return;
+    const clips = wandererClips[wandererMode] ?? [];
+    if (!clips.length || (wandererMode !== 'patrol' && voiceStarted)) return;
+    if (wandererMode === 'patrol') {
+      if (context.currentTime < nextVoice) return;
+      if (Math.hypot(mouth.x-listenerPosition.x,mouth.z-listenerPosition.z) > hearingDistance) return;
+      if (!voiceStarted) {
+        voiceIndex = Math.floor(randomSource()*clips.length) % clips.length;
+        if (clips.length>1 && voiceIndex === lastPatrolIndex) voiceIndex=(voiceIndex+1)%clips.length;
+      }
+    }
+    const clip = clips[voiceIndex % clips.length];
+    const buffer = decoded.get(clip.url);
+    if (!buffer) {
+      // Failed optional sound hardware or a corrupt clip must not block play.
+      if (failed.has(clip.url)) {voiceStarted=wandererMode!=='patrol';nextVoice=context.currentTime+6;}
+      return;
+    }
+    const source = context.createBufferSource();
+    const panner = context.createPanner();
+    const level = context.createGain();
+    const distanceLevel = context.createGain();
+    source.buffer = buffer;
+    source.loop = wandererMode === 'chase';
+    panner.panningModel = 'HRTF';
+    panner.distanceModel = 'inverse';
+    panner.refDistance = 2.5;
+    panner.maxDistance = hearingDistance;
+    panner.rolloffFactor = 1.25;
+    panner.coneInnerAngle = 360;
+    panner.coneOuterAngle = 360;
+    level.gain.value = wandererMode === 'chase' ? .62 : .52;
+    distanceLevel.gain.value = 0;
+    source.connect(level);
+    level.connect(panner);
+    panner.connect(distanceLevel);
+    distanceLevel.connect(master);
+    wandererSource=source;wandererPanner=panner;wandererLevel=level;wandererDistance=distanceLevel;
+    currentClip=clip;
+    voiceStarted=true;
+    if(wandererMode==='patrol')lastPatrolIndex=voiceIndex;
+    updateWandererPosition();
+    source.onended=()=>{
+      if(wandererSource!==source)return;
+      clearWandererVoice();
+      if(wandererMode==='patrol') {voiceStarted=false;nextVoice=context.currentTime+random(5,11);}
+    };
+    source.start();
+  }
+
+  function setWandererState(mode, position, {clipIndex} = {}) {
+    if(position) Object.assign(mouth,{x:position.x,y:(position.y??0)+1.8,z:position.z});
+    if(!['patrol','alert','chase','exhausted','capture','inactive'].includes(mode))mode='inactive';
+    if(mode!==wandererMode) {
+      clearWandererVoice();
+      wandererMode=mode;
+      voiceStarted=false;
+      const count=wandererClips[mode]?.length??1;
+      voiceIndex=Number.isInteger(clipIndex)?Math.abs(clipIndex)%count:Math.floor(randomSource()*count)%count;
+      nextVoice=(context?.currentTime??0)+(mode==='patrol'?1.3:0);
+    }
+    updateWandererPosition();
+    tickWanderer();
+  }
+
+  async function loadWandererClips(audioContext, generation) {
+    const clips=Object.values(wandererClips).flat();
+    await Promise.all(clips.map(async clip=>{
+      if(decoded.has(clip.url)||failed.has(clip.url))return;
+      try {
+        const response=await fetch(clip.url);
+        if(!response.ok)throw new Error('Audio unavailable');
+        const buffer=await audioContext.decodeAudioData(await response.arrayBuffer());
+        if(context===audioContext && generation===loadGeneration)decoded.set(clip.url,buffer);
+      } catch {
+        if(context===audioContext && generation===loadGeneration)failed.add(clip.url);
+      }
+    }));
+    if(context===audioContext && generation===loadGeneration)tickWanderer();
+  }
 
   function envelope(gain, at, volume, duration, attack = 0.012) {
     gain.gain.setValueAtTime(0.0001, at);
@@ -82,7 +225,7 @@ export function createAudio() {
   async function start() {
     try {
       if (context) {
-        if (context.state === 'suspended') await context.resume();
+        if (context.state === 'suspended' && !paused) await context.resume();
         return;
       }
       const AudioContext = globalThis.AudioContext || globalThis.webkitAudioContext;
@@ -138,7 +281,9 @@ export function createAudio() {
       nextStep = context.currentTime + 0.3;
       nextBird = context.currentTime + 3;
       nextFire = context.currentTime;
-      if (context.state === 'suspended') await context.resume();
+      updateListener();
+      if (context.state === 'suspended' && !paused) await context.resume();
+      await loadWandererClips(context,++loadGeneration);
     } catch {
       // Sound is atmospheric; unsupported hardware must never block the game.
     }
@@ -147,6 +292,7 @@ export function createAudio() {
   function update(nextState = {}) {
     state = { ...state, ...nextState };
     if (!ready()) return;
+    tickWanderer();
     const now = context.currentTime;
     const night = state.phase === 'night';
     const breeze = 0.035 + Math.sin(now * 0.31) * 0.008;
@@ -215,6 +361,12 @@ export function createAudio() {
         noise(0.23, 0.20, 800, 'lowpass', 0, position);
         tone(95, 32, 0.2, 0.13, 'triangle');
         break;
+      case 'neck-snap':
+        // A brief dry impact under cloth, kept below the voice in the mix.
+        noise(.085,.085,720,'lowpass');
+        noise(.13,.035,1450,'bandpass',.035);
+        tone(87,39,.12,.045,'triangle');
+        break;
       case 'collect':
         noise(0.12, 0.055, 1000, 'lowpass');
         tone(650, 820, 0.16, 0.04);
@@ -276,7 +428,22 @@ export function createAudio() {
     if (context && master) master.gain.setTargetAtTime(muted ? 0 : 0.42, context.currentTime, 0.06);
   }
 
+  function setPaused(value) {
+    paused=Boolean(value);
+    if(!context)return;
+    try {
+      const operation=paused?context.suspend():context.resume();
+      operation?.then(()=>{if(!paused)tickWanderer();}).catch(()=>{});
+    } catch { /* Audio support never blocks a pause or resume. */ }
+  }
+
   function stop() {
+    ++loadGeneration;
+    clearWandererVoice();
+    wandererMode='inactive';
+    voiceStarted=false;
+    decoded.clear();
+    failed.clear();
     for (const source of loops.splice(0)) {
       try { source.stop(); } catch { /* Already stopped. */ }
       source.disconnect();
@@ -290,5 +457,13 @@ export function createAudio() {
     cooldowns.clear();
   }
 
-  return { start, update, play, setMuted, stop };
+  return { start, update, play, setMuted, setPaused, stop, setWandererState, updateListener,
+    get debug() {
+      return {contextState:context?.state??'uninitialized',paused,muted,currentMode:wandererMode,
+        currentClip:currentClip?.name??null,playing:Boolean(wandererSource),looping:Boolean(wandererSource?.loop),
+        decodedClips:decoded.size,failedClips:failed.size,totalClips:Object.values(wandererClips).flat().length,
+        sourcePosition:{...mouth},listenerPosition:{...listenerPosition},listenerForward:{...listenerForward},
+        hearingDistance};
+    }
+  };
 }

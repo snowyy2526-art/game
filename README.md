@@ -1,6 +1,6 @@
 # Entre as Árvores
 
-Jogo de terror e sobrevivência em primeira pessoa, em português. Uma floresta procedural, uma cabana e cinco dias e noites para sobreviver. Todos os modelos, texturas e sons são gerados localmente, sem serviços externos nem chaves de API.
+Jogo de terror e sobrevivência em primeira pessoa, em português. Uma floresta procedural, uma cabana e cinco dias e noites para sobreviver. Modelos e texturas são gerados localmente. O Andarilho usa as gravações MP3 enviadas pelo criador; os demais sons são procedurais. Não há serviços externos nem chaves de API.
 
 ## Executar
 
@@ -29,6 +29,8 @@ Se a captura do mouse for bloqueada pela prévia, segure o botão direito e arra
 
 O Andarilho usa um modelo 3D articulado adaptado da referência visual enviada pelo criador do projeto: cerca de 2,10 m, rosto de boca aberta e olhos fundos, corpo esquelético, capa malva rasgada, faixas, bermuda remendada, cordas na cintura, mochila e facão na bainha. A respiração, o andar assimétrico e os dedos pendentes fazem parte da animação. O Impostor também copia essa aparência ao se disfarçar de Andarilho.
 
+O Andarilho tem 14 gravações originais em `audio/wanderer/`: seis de patrulha, três avisos antes da corrida, uma respiração em loop na perseguição, três falas de eliminação e uma recuperação de fôlego. O choro duplicado foi incluído uma vez. As falas usam áudio 3D HRTF, acompanham a boca da entidade e só são audíveis por perto; a direção também muda quando você vira a cabeça. Os estados não sobrepõem falas. Pausa, silêncio, reinício e mudança de fase interrompem ou suspendem o som correspondente. As gravações ficam incorporadas no HTML portátil para manter o modo offline.
+
 A Flora Tímida também segue a referência enviada pelo criador: cerca de 4,5 m na postura ativa, casca retorcida, marcas oculares, dedos de galho e pés de raízes. Quando para, une as pernas e ergue os braços, chegando a cerca de 5,8 m. A floresta tem 780 árvores de 4,65 a 7,40 m, com a mesma paleta, folhas e nós na casca; 600 ficam na área explorável. Trilhas e a clareira da cabana continuam transitáveis. Troncos e paredes interrompem a visão. Para identificar a entidade camuflada, observe de perto as marcas na casca; um rótulo não revela imediatamente sua presença.
 
 Cada dia dura 3 minutos e cada noite 1 minuto e 40 segundos. O jogo termina em vitória somente ao amanhecer após a quinta noite. Você pode encerrar o período diurno antes, pelo menu de construção, estando dentro da cabana. Os menus pausam a simulação.
@@ -55,7 +57,7 @@ Durante o dia, colete madeira (troncos), sucata (caixas) e comida (cogumelos). S
 
 ### Entidades
 
-- **Andarilho:** patrulha lentamente e persegue o jogador, com passos sofridos e respiração pesada.
+- **Andarilho:** patrulha lentamente, avisa antes de correr em alta velocidade e se esgota após uma arrancada curta. Fuja com Shift durante a corrida e aproveite a recuperação para escapar. Ao capturar você, uma cena em primeira pessoa mostra o agarrão e a elevação pelo pescoço antes da tela de fim de jogo.
 - **Flora Tímida:** o ruído a atrai; depois de encontrar você, aproxima-se quando não está sendo observada.
 - **Impostor:** alterna entre humano ferido, objeto e criatura. Disfarces possuem detalhes errados. Aproximar-se revela a armadilha.
 - **Invasor:** ataca entradas, esgota o vigor e recua para se recuperar. Lanças e resistência com o corpo ajudam a ganhar tempo.
@@ -73,7 +75,7 @@ Os testes cobrem o ciclo completo de cinco noites, custos e restrições das rec
 
 Para os testes de interface, use `npm run test:browser`. O Playwright utiliza `/usr/bin/chromium` se disponível; caso contrário, execute `npx playwright install chromium` uma vez. O teste inicia seu próprio Vite, verifica menus, movimentação, coleta, construção e pausa. Na nuvem, os comandos que abrem portas ou executam o navegador precisam da permissão de execução correspondente.
 
-Não há salvamento da partida: **Começar novamente** reinicia os cinco dias. O projeto é uma versão inicial jogável, com arte e áudio procedurais.
+Não há salvamento da partida: **Começar novamente** reinicia os cinco dias. O projeto é uma versão inicial jogável, com arte procedural e áudio misturando gravações do criador com efeitos sintetizados.
 
 ## Publicação no GitHub Pages
 

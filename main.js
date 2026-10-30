@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { createWorld } from './world.js';
 import { createEntities } from './entities.js';
 import { createAudio } from './audio.js';
+import { WANDERER_CLIPS } from './audio/wanderer-clips.js';
+import { createWandererCapture } from './wanderer-capture.js';
 import { createState, advanceTime, craft, eat, nextPhase, DAY_DURATION, NIGHT_DURATION } from './survival.js';
 
 function initializeGame() {
@@ -51,9 +53,11 @@ const torch = new THREE.SpotLight(0xe9e1bd, 0, 28, 0.55, 0.65, 1.4);
 scene.add(torch, torch.target);
 const world = createWorld(THREE, scene, { lowQuality: !!softwareRenderer });
 const entities = createEntities(THREE, scene);
-const audio = createAudio();
+const audio = createAudio({ wandererClips: WANDERER_CLIPS });
+const wanderer = entities.list.find(e => e.id === 'wanderer');
 let state = createState();
 let mode = 'intro', overlay = null, started = false, yaw = 0, pitch = 0, muted = false;
+let cinematic = null, resumeMode = 'playing';
 let captureUnavailable = false, dragging = false, pointerX = 0, pointerY = 0, hadPointerLock = false;
 let toastUntil = 0, actionCooldown = 0, darknessWarned = false, hungerWarned = false;
 let footBob = 0, viewInspection = null, currentTarget = null, activeSpearAnimation = 0;
@@ -90,7 +94,7 @@ function context() {
     isPointVisible: point => sightFrustum.containsPoint(point),
     isMovementBlocked: (x,z,radius) => world.obstacles.some(o=>Math.hypot(x-o.x,z-o.z)<o.radius+radius),
     bracing: keys.has('KeyB') && insideCabin() ? nearestEntrance(2.8)?.id ?? null : null,
-    kill, toast, sound: (name,pos) => audio.play(name,pos), damage: n => {state.health=Math.max(0,state.health-n);}, time:state.time };
+    kill, captureWanderer, toast, sound: (name,pos) => audio.play(name,pos), damage: n => {state.health=Math.max(0,state.health-n);}, time:state.time };
 }
 function setTheme(phase, intro = false) {
   const night = phase === 'night';
@@ -111,8 +115,9 @@ function closeOverlay(resume = true) {
   keys.clear();
   dragging = false;
   if (resume && started && mode !== 'ended') {
-    mode = 'playing';
-    requestLock();
+    mode = resumeMode;
+    audio.setPaused(false);
+    if(mode === 'playing') requestLock();
   }
 }
 function requestLock() {
@@ -131,8 +136,11 @@ function useDragControls() {
 }
 function openOverlay(id) {
   if (mode === 'ended') return;
+  if ((mode === 'capturing' || (mode === 'paused' && resumeMode === 'capturing')) && id !== 'pause-panel') return;
   if (overlay) $(overlay).hidden = true;
+  if (mode === 'playing' || mode === 'capturing') resumeMode = mode;
   mode = started ? 'paused' : 'intro';
+  audio.setPaused(true);
   overlay = id;
   $(id).hidden = false;
   keys.clear();
@@ -142,6 +150,11 @@ function openOverlay(id) {
 }
 function startGame() {
   closeOverlay(false);
+  cinematic?.dispose(); cinematic = null;
+  $('capture-shade').hidden = true;
+  $('capture-shade').style.cssText = '';
+  audio.setWandererState('inactive',wanderer.group.position);
+  audio.setPaused(false);
   state = createState();
   player.set(0,1.7,8); yaw=0; pitch=0;
   darknessWarned=false; hungerWarned=false;
@@ -150,7 +163,7 @@ function startGame() {
   entities.reset();
   entities.setPhase('day',1);
   setTheme('day');
-  mode='playing'; started=true;
+  mode='playing'; resumeMode='playing'; started=true;
   $('intro').hidden=true; $('hud').hidden=false; $('crosshair').hidden=false; $('end-panel').hidden=true;
   audio.start();
   toast('DIA 1 · Explore com cuidado. A cabana fica no centro da floresta.',7);
@@ -158,6 +171,8 @@ function startGame() {
   updateHUD();
 }
 function endGame(won, reason) {
+  cinematic?.dispose(); cinematic=null;
+  audio.setWandererState('inactive',wanderer.group.position);
   mode='ended'; state.dead=!won; state.won=won;
   keys.clear(); document.exitPointerLock?.();
   $('end-panel').hidden=false; $('crosshair').hidden=true;
@@ -167,7 +182,22 @@ function endGame(won, reason) {
   audio.play(won?'dawn':'danger');
 }
 function kill(reason) { if(mode==='playing') endGame(false, reason); }
+function captureWanderer(entity) {
+  if(mode !== 'playing') return;
+  mode='capturing'; resumeMode='capturing';
+  keys.clear(); dragging=false;
+  document.exitPointerLock?.();
+  $('hud').hidden=true; $('crosshair').hidden=true;
+  $('toast').classList.remove('visible');
+  handSpear.visible=false; torch.intensity=0;
+  $('capture-shade').hidden=false;
+  audio.setWandererState('capture',entity.group.position);
+  cinematic=createWandererCapture(THREE,{entity,camera,
+    onSnap:()=>audio.play('neck-snap',entity.group.position),
+    onComplete:()=>endGame(false,'O Andarilho agarrou seu pescoço, ergueu você do chão e apertou até o último estalo. Ao ouvir o aviso, corra: ele precisa parar para recuperar o fôlego.')});
+}
 function changePhase() {
+  audio.setWandererState('inactive',wanderer.group.position);
   const next=nextPhase(state);
   if(next==='win') { endGame(true); return; }
   setTheme(next); entities.setPhase(next,state.day);
@@ -251,7 +281,7 @@ function interact() {
   else if(t?.type==='entrance')openOverlay('craft-panel');
 }
 function doCraft(recipe) {
-  if(!started || mode==='ended')return;
+  if(!started || mode==='ended' || mode==='capturing' || resumeMode==='capturing')return;
   if(recipe==='fuel' && !insideCabin()) {toast('Abasteça a lareira de dentro da cabana.');return;}
   const result=craft(state,recipe,nearestEntrance(3.5));
   toast(result.message,5);
@@ -334,8 +364,9 @@ renderer.domElement.addEventListener('mousedown',e=>{
 document.addEventListener('mouseup',e=>{if(e.button===2)dragging=false;});
 document.addEventListener('keydown',e=>{
   if(['Tab','Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code))e.preventDefault();
-  if(e.code==='Escape') {if(overlay)closeOverlay(started);else if(started&&mode==='playing')openOverlay('pause-panel');return;}
+  if(e.code==='Escape') {if(overlay)closeOverlay(started);else if(started&&(mode==='playing'||mode==='capturing'))openOverlay('pause-panel');return;}
   if(e.repeat)return;
+  if(e.code==='KeyM'&&started){muted=!muted;audio.setMuted(muted);if(mode==='playing')toast(muted?'Áudio silenciado. Pressione M para ativar.':'Áudio ativado. Escute a floresta.');return;}
   if(e.code==='KeyH'){if(overlay==='guide-panel')closeOverlay(started);else openOverlay('guide-panel');return;}
   if(e.code==='Tab'&&started&&mode!=='ended'){if(overlay==='craft-panel')closeOverlay();else openOverlay('craft-panel');return;}
   if(mode!=='playing')return;
@@ -344,11 +375,10 @@ document.addEventListener('keydown',e=>{
   if(e.code==='KeyR')doCraft('repair');
   if(e.code==='KeyF'){if(eat(state)){audio.play('eat');toast('Você se alimentou. +38 nutrição.');}else toast('Sem comida ou você já está saciado.');}
   if(e.code==='Space')attack();
-  if(e.code==='KeyM'){muted=!muted;audio.setMuted(muted);toast(muted?'Áudio silenciado. Pressione M para ativar.':'Áudio ativado. Escute a floresta.');}
 });
 document.addEventListener('keyup',e=>keys.delete(e.code));
-window.addEventListener('blur',()=>{keys.clear();dragging=false;if(mode==='playing')openOverlay('pause-panel');});
-document.addEventListener('visibilitychange',()=>{if(document.hidden&&mode==='playing')openOverlay('pause-panel');});
+window.addEventListener('blur',()=>{keys.clear();dragging=false;if(mode==='playing'||mode==='capturing')openOverlay('pause-panel');});
+document.addEventListener('visibilitychange',()=>{if(document.hidden&&(mode==='playing'||mode==='capturing'))openOverlay('pause-panel');});
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);});
 
 const clock=new THREE.Clock();
@@ -371,18 +401,29 @@ function frame() {
     handSpear.position.z=-.5-Math.max(0,Math.sin(activeSpearAnimation/.28*Math.PI))*.65;
     const ctx=context();
     entities.update(dt,ctx);
-    for(const entrance of world.entrances)world.setEntranceHealth(entrance.id,entrance.health/entrance.maxHealth);
-    world.update(dt,{time:state.time,phase:state.phase,fire:state.fire,player});
-    audio.update({phase:state.phase,inside:ctx.inside,fire:state.fire,...movement,time:state.time});
-    torch.intensity=state.phase==='night'&&!ctx.inside?9:0;torch.position.copy(player);torch.target.position.copy(player).add(direction);
-    if(state.fire<12&&!darknessWarned){toast('A lareira está morrendo. Use 3 madeiras para afastar o Pesadelo.',6);darknessWarned=true;}
-    if(state.hunger<25&&!hungerWarned){toast('Seu corpo precisa de comida. Pressione F para consumir um suprimento.',6);hungerWarned=true;}
-    if(state.hunger>30)hungerWarned=false;
-    if(state.health<=0)kill('Seu corpo não resistiu. Coma para recuperar forças e mantenha as criaturas longe.');
-    if(mode==='playing' && state.phaseTime>=(state.phase==='day'?DAY_DURATION:NIGHT_DURATION))changePhase();
-    hudTimer+=dt;if(hudTimer>.1){updateHUD();hudTimer=0;}
-    shadowTimer+=dt;if(shadowTimer>.25){renderer.shadowMap.needsUpdate=true;shadowTimer=0;}
+    if(mode==='playing') {
+      audio.setWandererState(wanderer.active?wanderer.mode:'inactive',wanderer.group.position,{clipIndex:wanderer.alertClipIndex});
+      for(const entrance of world.entrances)world.setEntranceHealth(entrance.id,entrance.health/entrance.maxHealth);
+      world.update(dt,{time:state.time,phase:state.phase,fire:state.fire,player});
+      audio.update({phase:state.phase,inside:ctx.inside,fire:state.fire,...movement,time:state.time});
+      torch.intensity=state.phase==='night'&&!ctx.inside?9:0;torch.position.copy(player);torch.target.position.copy(player).add(direction);
+      if(state.fire<12&&!darknessWarned){toast('A lareira está morrendo. Use 3 madeiras para afastar o Pesadelo.',6);darknessWarned=true;}
+      if(state.hunger<25&&!hungerWarned){toast('Seu corpo precisa de comida. Pressione F para consumir um suprimento.',6);hungerWarned=true;}
+      if(state.hunger>30)hungerWarned=false;
+      if(state.health<=0)kill('Seu corpo não resistiu. Coma para recuperar forças e mantenha as criaturas longe.');
+      if(mode==='playing' && state.phaseTime>=(state.phase==='day'?DAY_DURATION:NIGHT_DURATION))changePhase();
+      hudTimer+=dt;if(hudTimer>.1){updateHUD();hudTimer=0;}
+      shadowTimer+=dt;if(shadowTimer>.25){renderer.shadowMap.needsUpdate=true;shadowTimer=0;}
+    }
   }
+  if(mode==='capturing' && cinematic) {
+    const capture=cinematic.update(dt);
+    $('capture-shade').style.setProperty('--capture-fade',capture.fade);
+    $('capture-shade').style.setProperty('--capture-pressure',capture.pressure);
+    audio.setWandererState(mode==='capturing'?'capture':'inactive',wanderer.group.position);
+  }
+  camera.getWorldDirection(direction);
+  audio.updateListener(camera.position,direction);
   if(performance.now()>toastUntil)$('toast').classList.remove('visible');
   renderer.render(scene,camera);
 }
@@ -395,7 +436,10 @@ window.__game = {
   get state(){return structuredClone(state);},
   get mode(){return mode;},
   get position(){return {x:player.x,y:player.y,z:player.z};},
-  get entities(){return entities.list.map(e=>({id:e.id,name:e.name,active:e.active}));},
+  get entities(){return entities.list.map(e=>({id:e.id,name:e.name,active:e.active,mode:e.mode,position:{x:e.group.position.x,y:e.group.position.y,z:e.group.position.z}}));},
+  get audio(){return audio.debug;},
+  get capture(){return cinematic?.state ?? null;},
+  get camera(){return {x:camera.position.x,y:camera.position.y,z:camera.position.z};},
   get forest(){return {...world.forestMetrics};},
   get entrances(){return world.entrances.map(e=>({id:e.id,health:e.health,maxHealth:e.maxHealth}));},
   get resources(){return world.resources.map(r=>({id:r.id,kind:r.kind,available:r.available,position:{x:r.position.x,z:r.position.z}}));},

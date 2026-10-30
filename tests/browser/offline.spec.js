@@ -20,6 +20,8 @@ test('the self-contained HTML plays offline without a server or external asset r
   await expect(page.locator('#start-button')).toBeVisible();
   await page.locator('#start-button').click();
   await page.waitForFunction(()=>window.__game.mode==='playing');
+  await page.waitForFunction(()=>window.__game.audio.decodedClips===14);
+  expect(await page.evaluate(()=>window.__game.audio.failedClips)).toBe(0);
   await page.keyboard.down('w');
   try{await page.waitForFunction(()=>window.__game.position.z<7);}finally{await page.keyboard.up('w');}
   await page.keyboard.press('Tab');

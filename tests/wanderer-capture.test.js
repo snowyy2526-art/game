@@ -1,0 +1,50 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import * as THREE from 'three';
+import { createWandererCapture } from '../wanderer-capture.js';
+import { createWandererModel } from '../models/wanderer.js';
+
+test('capture lifts the view, holds the player and completes after the snap, once', () => {
+  const entity = createWandererModel(THREE);
+  entity.group.position.set(12,0,-9);
+  entity.group.rotation.y = Math.PI / 2;
+  const camera = new THREE.PerspectiveCamera(65,1,.1,180);
+  camera.position.set(13,1.7,-9);
+  let snaps=0, deaths=0;
+  const capture=createWandererCapture(THREE,{entity,camera,onSnap:()=>snaps++,onComplete:()=>deaths++});
+  const origin=entity.group.position.clone();
+  for(let frame=0;frame<220;frame++) capture.update(1/60);
+  assert.ok(camera.position.y>2.6,'capture should raise the player above the ground');
+  assert.ok(Math.abs(camera.position.x-12.85)<.02,'camera remains in front of the rotated entity');
+  assert.ok(Math.abs(camera.position.z+9)<.02);
+  assert.equal(capture.state.stage,'hold');
+  assert.equal(deaths,0,'lifting the player must not skip to the end screen');
+  assert.equal(snaps,0);
+  for(let frame=0;frame<211;frame++) capture.update(1/60);
+  assert.equal(snaps,1);
+  assert.equal(deaths,1);
+  assert.equal(capture.state.fade,1);
+  capture.update(3);
+  assert.equal(deaths,1);
+  assert.deepEqual(entity.group.position.toArray(),origin.toArray(),'animation cannot move the AI root');
+  capture.dispose();
+  assert.equal(camera.fov,65,'restart restores the original field of view');
+});
+
+test('capture holds its pose when its simulation is paused and starts from the existing view', () => {
+  const entity=createWandererModel(THREE);
+  const camera=new THREE.PerspectiveCamera(65,1,.1,180);
+  camera.position.set(.2,1.05,.7);
+  camera.rotation.set(.3,2,.1);
+  const position=camera.position.clone(), rotation=camera.quaternion.clone();
+  const capture=createWandererCapture(THREE,{entity,camera});
+  capture.update(0);
+  assert.deepEqual(camera.position.toArray(),position.toArray());
+  assert.ok(camera.quaternion.angleTo(rotation)<1e-7);
+  capture.update(2);
+  const frozen=camera.position.clone(), progress=capture.state.progress;
+  capture.update(0);
+  assert.deepEqual(camera.position.toArray(),frozen.toArray());
+  assert.equal(capture.state.progress,progress);
+  assert.ok(camera.position.toArray().every(Number.isFinite));
+});

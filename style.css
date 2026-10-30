@@ -10,3 +10,5 @@
 
 /* Toast visibility is controlled by the game, including while a menu is open. */
 .toast{opacity:0;visibility:hidden;transition:opacity .2s,visibility .2s}.toast.visible{opacity:1;visibility:visible}
+
+#capture-shade{position:fixed;inset:0;pointer-events:none;z-index:7;background:linear-gradient(rgba(0,0,0,var(--capture-fade,0)),rgba(0,0,0,var(--capture-fade,0))),radial-gradient(ellipse at center,transparent 15%,rgba(16,5,5,calc(var(--capture-pressure,0)*.76)) 100%)}

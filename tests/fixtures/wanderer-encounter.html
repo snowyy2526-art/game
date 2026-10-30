@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<title>Andarilho · verificação do áudio espacial</title>
+<button id="start">Iniciar áudio</button>
+<output id="status">Pronto</output>
+<script type="module">
+import { createAudio } from '../../audio.js';
+import { WANDERER_CLIPS } from '../../audio/wanderer-clips.js';
+
+// Observe the production voice graph without replacing decoding or panning.
+// This fixture is served only by Vite; it is not included in the game build.
+const NativeAudioContext=globalThis.AudioContext;
+let context=null, tap=null;
+globalThis.AudioContext=class extends NativeAudioContext {
+  constructor(...args){super(...args);context=this;}
+  createPanner(){
+    const panner=super.createPanner();
+    const connect=panner.connect.bind(panner);
+    panner.connect=destination=>{
+      const result=connect(destination);
+      const splitter=this.createChannelSplitter(2);
+      const analysers=[this.createAnalyser(),this.createAnalyser()];
+      destination.connect(splitter);
+      for(let channel=0;channel<2;channel++){
+        analysers[channel].fftSize=2048;
+        splitter.connect(analysers[channel],channel);
+      }
+      tap={panner,analysers};
+      return result;
+    };
+    return panner;
+  }
+};
+const audio=createAudio({wandererClips:WANDERER_CLIPS});
+audio.updateListener({x:0,y:1.7,z:0},{x:0,y:0,z:-1});
+document.querySelector('#start').onclick=async()=>{
+  await audio.start();
+  document.querySelector('#status').textContent='Áudio iniciado';
+};
+window.__encounter={audio,
+  set(mode,position={x:3,y:0,z:-2},forward={x:0,y:0,z:-1}){
+    audio.updateListener({x:0,y:1.7,z:0},forward);
+    audio.setWandererState(mode,position);
+  },
+  get audioTime(){return context?.currentTime??0;},
+  get panner(){return tap?{model:tap.panner.panningModel,distanceModel:tap.panner.distanceModel}:null;},
+  async measure(){
+    const squares=[0,0];let count=0;
+    for(let i=0;i<14;i++){
+      for(let channel=0;channel<2;channel++){
+        const values=new Float32Array(tap.analysers[channel].fftSize);
+        tap.analysers[channel].getFloatTimeDomainData(values);
+        squares[channel]+=values.reduce((total,sample)=>total+sample*sample,0);
+        if(channel===0)count+=values.length;
+      }
+      await new Promise(resolve=>setTimeout(resolve,40));
+    }
+    return squares.map(value=>Math.sqrt(value/count));
+  }
+};
+</script>
+</html>

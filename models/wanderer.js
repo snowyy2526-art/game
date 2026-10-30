@@ -376,8 +376,73 @@ export function createWandererModel(THREE) {
   function resetPose() {
     for (const rest of pose) { rest.object.position.copy(rest.position); rest.object.rotation.copy(rest.rotation); rest.object.scale.copy(rest.scale); }
   }
-  function animate(time, moving) {
+  function animate(time, moving, mode = 'patrol') {
     resetPose();
+    if (mode === 'capture') { animateCapture(0); return; }
+    if (mode === 'alert') {
+      const tremor = Math.sin(time * 13) * .012;
+      torso.rotation.x = -.075;
+      torso.rotation.z = tremor;
+      torso.scale.z = 1 + Math.sin(time * 5) * .025;
+      head.rotation.x = -.12;
+      head.rotation.z = -.045 + tremor;
+      arms.forEach((arm, i) => {
+        arm.rotation.x = -.42 + tremor * (i ? -1 : 1);
+        arm.rotation.z = i ? .17 : -.17;
+        elbows[i].rotation.x = -.7;
+        hands[i].rotation.x = -.28;
+        knees[i].rotation.x = .12;
+        legs[i].rotation.x = -.08;
+      });
+      return;
+    }
+    if (mode === 'chase') {
+      const cycle = time * 13.5;
+      const bounce = Math.abs(Math.sin(cycle));
+      torso.rotation.x = .3;
+      torso.position.y += bounce * .035;
+      torso.position.z += .08;
+      torso.rotation.y = Math.sin(cycle) * .08;
+      pelvis.position.y += bounce * .055;
+      pelvis.rotation.y = Math.sin(cycle) * .11;
+      head.rotation.x = -.23;
+      head.rotation.z = Math.sin(cycle) * .045;
+      cape.rotation.x = .2 + bounce * .06;
+      cape.rotation.z = Math.sin(cycle + .7) * .08;
+      arms.forEach((arm, i) => {
+        const step = cycle + i * Math.PI;
+        arm.rotation.x = Math.sin(step + Math.PI) * .82;
+        arm.rotation.z = i ? .08 : -.08;
+        elbows[i].rotation.x = -.8 - Math.max(0, -Math.sin(step)) * .35;
+        hands[i].rotation.x = -.18;
+        legs[i].rotation.x = Math.sin(step) * .83;
+        knees[i].rotation.x = Math.max(0, Math.sin(step - .8)) * 1.22;
+        feet[i].rotation.x = -.12 + Math.sin(step + .3) * .23;
+      });
+      return;
+    }
+    if (mode === 'exhausted') {
+      const breath = Math.sin(time * 6.2);
+      const tremor = Math.sin(time * 19) * .008;
+      torso.rotation.x = .57 + breath * .035;
+      torso.position.y -= .13 + breath * .009;
+      torso.position.z += .08;
+      torso.scale.z = 1 + breath * .055;
+      pelvis.position.y -= .1;
+      head.rotation.x = .17 + breath * .04;
+      head.rotation.z = -.06;
+      cape.rotation.x = -.12;
+      arms.forEach((arm, i) => {
+        arm.rotation.x = -.5 + breath * .024;
+        arm.rotation.z = i ? .065 : -.065;
+        elbows[i].rotation.x = -.16;
+        hands[i].rotation.x = .21 + tremor;
+        legs[i].rotation.x = -.2;
+        knees[i].rotation.x = .36 + tremor;
+        feet[i].rotation.x = -.12;
+      });
+      return;
+    }
     const breath = Math.sin(time * 2.05) + Math.sin(time * 4.7) * .18;
     const cycle = time * 2.45;
     const effort = Math.max(0, Math.sin(cycle));
@@ -404,12 +469,80 @@ export function createWandererModel(THREE) {
       feet[i].rotation.x = moving ? Math.sin(step + .35) * .065 : 0;
     });
   }
+  const capture = Object.freeze({ duration: 7, playerDistance: .85, startEyeHeight: 1.7, liftedEyeHeight: 2.65, reachEnd: .2, liftEnd: .5, breakAt: .84 });
+  const smooth = value => { const t = Math.max(0, Math.min(1, value)); return t * t * (3 - 2 * t); };
+  const upperRest = elbows.map(elbow => elbow.position.clone().normalize());
+  const foreRest = hands.map(hand => hand.position.clone().normalize());
+  const upperLength = elbows.map(elbow => elbow.position.length());
+  const foreLength = hands.map(hand => hand.position.length());
+  const captureGrip = new THREE.Vector3();
+
+  // Solve two real articulated bones, keeping the grip at the player's throat
+  // as the camera rises. Targets are model-local; the AI alone owns world pose.
+  function reachWrist(index, wrist, fingerDirection) {
+    group.updateMatrixWorld(true);
+    const arm = arms[index], elbow = elbows[index], hand = hands[index];
+    const shoulder = group.worldToLocal(arm.getWorldPosition(new THREE.Vector3()));
+    const delta = wrist.clone().sub(shoulder);
+    const d = Math.max(.001, Math.min(delta.length(), upperLength[index] + foreLength[index] - .001));
+    const forward = delta.normalize();
+    const outward = new THREE.Vector3(index ? 1 : -1, 0, 0);
+    outward.addScaledVector(forward, -outward.dot(forward)).normalize();
+    const along = (upperLength[index] ** 2 - foreLength[index] ** 2 + d * d) / (2 * d);
+    const bend = Math.sqrt(Math.max(0, upperLength[index] ** 2 - along * along));
+    const elbowTarget = shoulder.clone().addScaledVector(forward, along).addScaledVector(outward, bend);
+    const elbowInTorso = torso.worldToLocal(group.localToWorld(elbowTarget));
+    arm.quaternion.setFromUnitVectors(upperRest[index], elbowInTorso.sub(arm.position).normalize());
+    arm.updateMatrixWorld(true);
+    const wristInArm = arm.worldToLocal(group.localToWorld(wrist.clone()));
+    elbow.quaternion.setFromUnitVectors(foreRest[index], wristInArm.sub(elbow.position).normalize());
+    elbow.updateMatrixWorld(true);
+    const inverseElbow = elbow.getWorldQuaternion(new THREE.Quaternion()).invert();
+    const directionWorld = fingerDirection.clone().transformDirection(group.matrixWorld).applyQuaternion(inverseElbow);
+    hand.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), directionWorld.normalize());
+  }
+
+  function animateCapture(progress) {
+    resetPose();
+    const t = Math.max(0, Math.min(1, Number.isFinite(progress) ? progress : 0));
+    const reach = smooth(t / capture.reachEnd);
+    const lift = smooth((t - capture.reachEnd) / (capture.liftEnd - capture.reachEnd));
+    const squeeze = smooth((t - .55) / .25);
+    const jolt = Math.exp(-Math.max(0, t - capture.breakAt) * 85) * (t >= capture.breakAt ? 1 : 0);
+    const eyeY = THREE.MathUtils.lerp(capture.startEyeHeight, capture.liftedEyeHeight, lift);
+    const throatY = eyeY - .2;
+    torso.position.y += lift * .1;
+    torso.position.z += lift * .105;
+    torso.rotation.x = THREE.MathUtils.lerp(.045, -.075, lift) + jolt * .055;
+    head.rotation.x = -.08 - lift * .15;
+    head.rotation.y = jolt * .14;
+    head.rotation.z = -.025 + squeeze * .04;
+    cape.rotation.x = -.025 + lift * .05;
+    pelvis.rotation.y = squeeze * .025;
+    knees.forEach(knee => { knee.rotation.x = .07 * (1 - lift); });
+    captureGrip.set(0, throatY, capture.playerDistance);
+    arms.forEach((arm, i) => {
+      const side = i ? 1 : -1;
+      // Fingertips extend .25m up/forward from these wrists around the neck.
+      const wrist = new THREE.Vector3(side * (.115 - squeeze * .045), throatY - .2 + jolt * .025, .625 + jolt * .025);
+      reachWrist(i, wrist, new THREE.Vector3(-side * .13 * squeeze, .67, .74).normalize());
+      const targetArm = arm.quaternion.clone(), targetElbow = elbows[i].quaternion.clone(), targetHand = hands[i].quaternion.clone();
+      const restArm = pose.find(rest => rest.object === arm).rotation;
+      const restElbow = pose.find(rest => rest.object === elbows[i]).rotation;
+      const restHand = pose.find(rest => rest.object === hands[i]).rotation;
+      arm.quaternion.setFromEuler(restArm).slerp(targetArm, reach);
+      elbows[i].quaternion.setFromEuler(restElbow).slerp(targetElbow, reach);
+      hands[i].quaternion.setFromEuler(restHand).slerp(targetHand, reach);
+    });
+    group.updateMatrixWorld(true);
+  }
   const metadata = {
     design: 'user-concept-andarilho', height: 2.1, facing: '+z',
+    capture,
     features: [...featureNames],
     description: 'Emaciated bandaged wanderer with hollow face, exposed ribs, mauve ragged cape, patched shorts, waist cords, backpack and sheathed machete.',
   };
   group.userData.design = metadata.design;
   group.userData.height = metadata.height;
-  return { group, arms, legs, rig: { pelvis, torso, head, cape, elbows, hands, knees, feet }, animate, resetPose, metadata };
+  return { group, arms, legs, rig: { pelvis, torso, head, cape, elbows, hands, knees, feet, captureGrip }, animate, animateCapture, resetPose, metadata };
 }
