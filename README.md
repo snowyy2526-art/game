@@ -27,6 +27,8 @@ Se a captura do mouse for bloqueada pela prévia, segure o botão direito e arra
 
 ## Sobreviver
 
+O Andarilho usa um modelo 3D articulado adaptado da referência visual enviada pelo criador do projeto: cerca de 2,10 m, rosto de boca aberta e olhos fundos, corpo esquelético, capa malva rasgada, faixas, bermuda remendada, cordas na cintura, mochila e facão na bainha. A respiração, o andar assimétrico e os dedos pendentes fazem parte da animação. O Impostor também copia essa aparência ao se disfarçar de Andarilho.
+
 Cada dia dura 3 minutos e cada noite 1 minuto e 40 segundos. O jogo termina em vitória somente ao amanhecer após a quinta noite. Você pode encerrar o período diurno antes, pelo menu de construção, estando dentro da cabana. Os menus pausam a simulação.
 
 Durante o dia, colete madeira (troncos), sucata (caixas) e comida (cogumelos). Suprimentos reaparecem a cada amanhecer. Reforce as três entradas, fabrique lanças, alimente-se e abasteça a lareira. Você começa com alguns materiais, comida e fogo suficientes para aprender os controles.

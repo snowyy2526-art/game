@@ -1,3 +1,5 @@
+import { createWandererModel } from './models/wanderer.js';
+
 /** Procedural creatures and their readable, distinct survival rules. */
 export function createEntities(THREE, scene) {
   const v = () => new THREE.Vector3();
@@ -85,7 +87,7 @@ export function createEntities(THREE, scene) {
     return e;
   }
 
-  const wanderer = add('wanderer', 'O Andarilho', humanoid('wanderer'), 25, -25);
+  const wanderer = add('wanderer', 'O Andarilho', createWandererModel(THREE), 25, -25);
   wanderer.patrol = v();
   wanderer.aware = false;
 
@@ -123,6 +125,10 @@ export function createEntities(THREE, scene) {
   impostor.monster.scale.set(1.15, 1.2, 1.15);
   impostor.monster.children.forEach(child => { if (child.isMesh && child.material === skin) child.material = red; });
   impostor.group.add(impostor.monster);
+  // Its entity disguise copies the current Andarilho, including his silhouette
+  // and clothes. Walking backwards remains the deliberate tell.
+  impostor.entityDisguise = createWandererModel(THREE);
+  impostor.group.add(impostor.entityDisguise.group);
   impostor.disguise = 'human';
   impostor.revealed = false;
 
@@ -189,6 +195,7 @@ export function createEntities(THREE, scene) {
   }
 
   function animate(e, time, speed = 1) {
+    if (e.animate) { e.animate(time, e.moving); return; }
     if (!e.legs) return;
     e.legs.forEach((leg, i) => { leg.rotation.x = e.moving ? Math.sin(time * speed + i * Math.PI) * 0.24 : 0; });
     e.arms.forEach((arm, i) => { arm.rotation.x = e.moving ? Math.sin(time * speed + i * Math.PI + 0.6) * 0.19 : 0; });
@@ -214,6 +221,7 @@ export function createEntities(THREE, scene) {
       e.timer = 0;
       e.cueTimer = 0;
       e.moving = false;
+      e.resetPose?.();
       e.group.position.set(e.baseX, 0, e.baseZ);
     }
     if (phase === 'day') {
@@ -228,7 +236,9 @@ export function createEntities(THREE, scene) {
       impostor.disguise = ['human', 'object', 'entity'][(day - 1) % 3];
       impostor.human.visible = impostor.disguise === 'human';
       impostor.object.visible = impostor.disguise === 'object';
-      impostor.monster.visible = impostor.disguise === 'entity';
+      impostor.monster.visible = false;
+      impostor.entityDisguise.group.visible = impostor.disguise === 'entity';
+      impostor.entityDisguise.resetPose();
       // An entity disguise walks backwards, unlike the real Andarilho.
       impostor.group.scale.set(1, 1, 1);
       show(wanderer, true);
@@ -287,6 +297,7 @@ export function createEntities(THREE, scene) {
       impostor.timer = 0;
       impostor.human.visible = false;
       impostor.object.visible = false;
+      impostor.entityDisguise.group.visible = false;
       impostor.monster.visible = true;
       ctx.sound('reveal', impostor.group.position);
       ctx.toast('Isso nunca foi humano.');
@@ -311,6 +322,7 @@ export function createEntities(THREE, scene) {
       impostor.moving = false;
     }
     animate(impostor, elapsed, 2);
+    if (impostor.entityDisguise.group.visible) impostor.entityDisguise.animate(elapsed, impostor.moving);
   }
 
   function chooseEntrance(ctx) {
@@ -513,6 +525,7 @@ export function createEntities(THREE, scene) {
       nearest.timer = 0;
       nearest.human.visible = false;
       nearest.object.visible = false;
+      nearest.entityDisguise.group.visible = false;
       nearest.monster.visible = true;
       direction.copy(nearest.group.position).sub(origin).setY(0).normalize();
       nearest.group.position.addScaledVector(direction, 3);

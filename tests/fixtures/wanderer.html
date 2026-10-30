@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="pt-BR">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Andarilho · estudo do modelo</title>
+<style>
+  *{box-sizing:border-box}body{margin:0;color:#d6cbb9;background:#181916;font-family:Georgia,serif;overflow:hidden}
+  header{position:absolute;top:30px;left:42px;right:42px;z-index:2;display:flex;justify-content:space-between;align-items:baseline;pointer-events:none}
+  h1{font-size:30px;font-weight:400;letter-spacing:2px;margin:0}header span{font:10px monospace;letter-spacing:2px;color:#a99d8c}
+  footer{position:absolute;bottom:30px;left:0;right:0;z-index:2;display:grid;grid-template-columns:repeat(3,1fr);text-align:center;font:10px monospace;letter-spacing:3px;color:#a99d8c}
+  canvas{display:block;width:100vw;height:100vh}
+</style>
+<header><h1>O ANDARILHO</h1><span>REFERÊNCIA ADAPTADA AO MODELO 3D · 2,10 M</span></header>
+<footer><span>FRENTE</span><span>TRÊS QUARTOS</span><span>COSTAS</span></footer>
+<script type="module">
+import * as THREE from 'three';
+import { createWandererModel } from '../../models/wanderer.js';
+
+const renderer = new THREE.WebGLRenderer({antialias:true, preserveDrawingBuffer:true});
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.12;
+document.body.appendChild(renderer.domElement);
+const scene=new THREE.Scene();
+scene.background=new THREE.Color(0x181916);
+scene.add(new THREE.HemisphereLight(0xd3dfdc,0x332a22,1.25));
+const key=new THREE.DirectionalLight(0xffe1be,2.7);key.position.set(-3,5,5);scene.add(key);
+const rim=new THREE.DirectionalLight(0xa1b6c4,1.6);rim.position.set(3,3,-3);scene.add(rim);
+const model=createWandererModel(THREE);scene.add(model.group);
+const floor=new THREE.Mesh(new THREE.CircleGeometry(.58,64),new THREE.MeshStandardMaterial({color:0x20211c,roughness:1}));
+floor.rotation.x=-Math.PI/2;floor.position.y=-.015;scene.add(floor);
+const contact=new THREE.Mesh(new THREE.CircleGeometry(.38,48),new THREE.MeshBasicMaterial({color:0x0b0d0b,transparent:true,opacity:.5}));
+contact.rotation.x=-Math.PI/2;contact.scale.x=1.25;contact.position.y=-.01;scene.add(contact);
+let frameCount=0;
+const cameras=[];
+for(const position of [[0,1.25,5],[3.5,1.3,4.5],[0,1.25,-5]]){
+  const halfHeight=1.29,aspect=innerWidth/3/innerHeight;
+  const camera=new THREE.OrthographicCamera(-halfHeight*aspect,halfHeight*aspect,halfHeight,-halfHeight,.1,100);
+  camera.position.set(...position);camera.lookAt(0,1.04,0);cameras.push(camera);
+}
+const animate=new URLSearchParams(location.search).has('moving');
+function frame(ms=0){
+  model.animate(animate?ms/1000:0,animate);
+  renderer.setScissorTest(true);
+  for(let i=0;i<3;i++){
+    const width=Math.floor(innerWidth/3),left=i*width;
+    renderer.setViewport(left,0,width,innerHeight);renderer.setScissor(left,0,width,innerHeight);
+    renderer.render(scene,cameras[i]);
+  }
+  frameCount++;
+  if(animate)requestAnimationFrame(frame);
+}
+frame();
+window.__wandererPreview={model,scene,renderer,cameras,render:frame,get frameCount(){return frameCount;}};
+</script>
+</html>
